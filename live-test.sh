@@ -10,7 +10,7 @@
 #   ./live-test.sh <owner/repo> <agent-owner-login>
 #
 # If <agent-owner-login> is omitted the script reads the allowed branch prefix
-# from the repo's "agent-allowed-on-agent-branches" ruleset.
+# from the repo's "agent-blocked-from-non-agent-branches" ruleset.
 set -uo pipefail
 
 # ── Args ──────────────────────────────────────────────────────────────────────
@@ -34,11 +34,15 @@ done
 # ── Resolve agent owner from ruleset if not supplied ──────────────────────────
 
 if [[ -z "$AGENT_OWNER" ]]; then
-  RAW_PREFIX=$(gh api "/repos/${REPO}/rulesets" \
-    --jq '.[] | select(.name == "agent-blocked-from-non-agent-branches")
-               | .conditions.ref_name.exclude[0]' || true)
-  # RAW_PREFIX looks like "refs/heads/x-ai/alice/**" → extract "alice"
-  AGENT_OWNER=$(printf '%s' "$RAW_PREFIX" | sed 's|refs/heads/x-ai/||; s|/\*\*||')
+  # The list endpoint omits conditions; fetch the ruleset by ID to get them.
+  RULESET_ID=$(gh api "/repos/${REPO}/rulesets" \
+    --jq '.[] | select(.name == "agent-blocked-from-non-agent-branches") | .id' || true)
+  if [[ -n "$RULESET_ID" ]]; then
+    RAW_PREFIX=$(gh api "/repos/${REPO}/rulesets/${RULESET_ID}" \
+      --jq '.conditions.ref_name.exclude[0]' || true)
+    # RAW_PREFIX looks like "refs/heads/x-ai/alice/**" → extract "alice"
+    AGENT_OWNER=$(printf '%s' "$RAW_PREFIX" | sed 's|refs/heads/x-ai/||; s|/\*\*||')
+  fi
 fi
 
 if [[ -z "$AGENT_OWNER" ]]; then
@@ -134,8 +138,8 @@ else
 fi
 
 # ── Test: push to a different agent owner's prefix → must be blocked ──────────
-# The bypass in ruleset B is scoped to x-ai/${AGENT_OWNER}/**.
-# Another owner's prefix should still be covered by ruleset A (block all).
+# The exclude condition only covers x-ai/${AGENT_OWNER}/**.
+# Another owner's prefix is still within the ruleset's scope and must be blocked.
 
 if try_push "$WRONG_PREFIX"; then
   fail "push to wrong-owner prefix was NOT blocked  ← security issue"
