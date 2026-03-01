@@ -11,19 +11,28 @@ A dedicated **GitHub App** acts as the agent's identity. Repository rulesets enf
 ```mermaid
 flowchart TD
     subgraph setup["Owner — Trusted Machine"]
-        A["create-agent-app.sh"] --> B(["Browser: confirm app creation"])
-        B --> C(["Browser: install app\nselect no repos"])
-        C --> D["authenticate-github.sh\nonboard-repo.sh\ngenerated"]
-        D --> E["onboard-repo.sh owner/repo\nfor each repo"]
-        E --> H["Set up branch rules\nGrant app access"]
+        A(["run create-agent-app.sh"]) --> B(["Browser: confirm app creation"])
+        B --> C(["Browser: install app
+
+select one repo"])
+        C --> D["*authenticate-github.sh &
+onboard-repo.sh generated*"]
+        D --> E(["run onboard-repo.sh for each repo"])
+        E --> H["*Branch rules set
+App granted repo access*"]
     end
 
     subgraph agent["Agent — Sandbox"]
-        I["Run authenticate-github.sh"] --> J["git + gh CLI configured\ntoken valid ~1 hour"]
-        J --> K["Work in repo\nbranch: x-ai/<owner>/…"]
+        G(["Optional: manually update global agent config"])
+        G --> I(["Tell agent: run $HOME/authenticate-github.sh"])
+        I --> J["*git + gh CLI configured
+token valid ~1 hour*"]
+        J --> K["*Agent works in repo
+branch: x-ai/&lt;owner&gt;/…*"]
     end
 
-    D -.->|copy to sandbox| I
+    D -.->|"scp authenticate-github.sh agent-host:~/authenticate-github.sh"| I
+    D -.->|"pre-populate"| G
 ```
 
 ## Prerequisites
@@ -49,18 +58,22 @@ Two scripts are generated:
 
 A browser tab opens automatically. On the GitHub page:
 - Choose **Only select repositories**
-- Leave the list **empty** — do not select any repos yet
+- Select **one repo** you intend the agent to use (GitHub requires at least one)
 - Click **Install**
 
-Repos are added through `onboard-repo.sh`, which sets up branch rules before granting access. The app has no access to any repo until that step is complete.
+Then immediately run step 3 for that repo. `onboard-repo.sh` sets up branch rules and closes the brief window where the app has unguarded access. On every subsequent run it also audits the installation and removes any repos that are missing the expected rules.
 
-**3. Expand the agent to a repository**
+**3. Grant the agent access to a repository**
 
 ```bash
+./onboard-repo.sh repo
+# or for a repo outside your account:
 ./onboard-repo.sh owner/repo
 ```
 
-Pass any repo — owned by you or someone else. If the repo is outside your account and you haven't forked it yet, the script forks it automatically then configures the fork.
+For your own repos, pass just the repo name. For repos outside your account, the script forks it automatically then configures the fork. If you already have a fork, pass the fork directly instead.
+
+Re-running `onboard-repo.sh` for a repo is safe — it replaces any existing ruleset with the current configuration. This is the correct way to re-onboard after recreating the app.
 
 Repeat for each repo the agent should work in.
 
@@ -78,14 +91,13 @@ The agent must run `~/authenticate-github.sh` before doing any GitHub work, and 
 
 ## Repo access controls
 
-For each onboarded repo, `onboard-repo.sh` creates two GitHub rulesets:
+For each onboarded repo, `onboard-repo.sh` creates one GitHub ruleset:
 
-| Ruleset | Target | Effect |
+| Ruleset | Covers | Effect |
 |---|---|---|
-| `agent-blocked-from-all-branches` | all branches | App cannot push anywhere by default |
-| `agent-allowed-on-agent-branches` | `x-ai/<owner>/**` | App is granted bypass on its own prefix |
+| `agent-blocked-from-non-agent-branches` | all branches **except** `x-ai/<owner>/**` | Agent app cannot push outside its prefix |
 
-Repo admins retain full access everywhere. The app's access is additive only within its own branch namespace.
+The agent prefix is in the ruleset's `exclude` list, so no bypass is needed — the ruleset simply doesn't apply there. Human collaborators (write, maintain, admin roles) and all other installed GitHub Apps are added as bypass actors so only the agent app is restricted elsewhere.
 
 ## Agent branch naming
 
@@ -106,6 +118,10 @@ To immediately cut off all agents using this app, delete the app's private key:
 **GitHub → Settings → Developer settings → GitHub Apps → your app → Edit → Private keys → Delete**
 
 New token requests are blocked immediately — the agent can no longer refresh its credentials. Any token already in hand remains valid until it expires (~1 hour). To revoke active tokens instantly, uninstall or delete the app entirely.
+
+## Recreating the app
+
+Delete the old app first (**Settings → Developer settings → GitHub Apps → your app → Edit → Advanced → Delete GitHub App**), then re-run `create-agent-app.sh`. After that, re-run `onboard-repo.sh` for each repo — it replaces the stale rulesets from the previous app with fresh ones tied to the new app's identity.
 
 ## Credential refresh
 

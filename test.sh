@@ -63,9 +63,11 @@ chmod +x "$MAIN_BIN/gh"
 # For the https:// installation URL opened at the end, do nothing.
 cat > "$MAIN_BIN/xdg-open" << 'XDGEOF'
 #!/usr/bin/env bash
-if [[ "$1" == file://* ]]; then
+if [[ "$1" == http://localhost:* ]]; then
+  PORT="${1#http://localhost:}"
+  PORT="${PORT%%/*}"
   sleep 0.3
-  curl -sf "http://localhost:9876/callback?code=testcode123" > /dev/null || true
+  curl -sf "http://localhost:${PORT}/callback?code=testcode123" > /dev/null || true
 fi
 XDGEOF
 chmod +x "$MAIN_BIN/xdg-open"
@@ -224,7 +226,7 @@ elif [[ "\$*" == *"/access_tokens" ]]; then
 elif [[ "\$*" == *"/installation/repositories" ]]; then
   printf '{"repositories":[{"id":101,"full_name":"${TEST_OWNER}/testrepo"}]}'
 elif [[ "\$*" == */rulesets ]]; then
-  printf '[{"name":"agent-blocked-from-all-branches"},{"name":"agent-allowed-on-agent-branches"}]'
+  printf '[{"name":"agent-blocked-from-non-agent-branches"}]'
 else
   printf '{}'
 fi
@@ -283,14 +285,17 @@ CLOSE_LINE=$(printf '%s' "$SUCCESS_OUTPUT" | grep -n "STORE THE ABOVE IN GLOBAL 
 # $1 = path to write the mock
 # $2 = "exists" | "no-fork" | "not-a-fork"
 # $3 = "has-install" | "no-install"
+# $4 = "has-existing-ruleset" | "" (whether TARGET_REPO already has the ruleset)
 write_mock_gh() {
-  local mock_path="$1" fork_state="$2" install_state="$3"
+  local mock_path="$1" fork_state="$2" install_state="$3" ruleset_state="${4:-}"
   local install_id
   [[ "$install_state" == "has-install" ]] && install_id="55" || install_id=""
 
   cat > "$mock_path" << GHEOF
 #!/usr/bin/env bash
 RULESET_LOG="${TMPDIR_T}/rulesets.log"
+REMOVED_LOG="${TMPDIR_T}/removed.log"
+DELETED_RULESET_LOG="${TMPDIR_T}/deleted_ruleset.log"
 args="\$*"
 
 if [[ "\$args" == *"/repos/${TEST_OWNER}/testrepo"* && "\$args" != *"rulesets"* && "\$args" != *"select"* ]]; then
@@ -305,19 +310,55 @@ if [[ "\$args" == *"/repos/${TEST_OWNER}/extrepo"* && "\$args" != *"rulesets"* &
   esac
 fi
 
+# Remove repo from installation (audit) — checked before other /installations handlers
+if [[ "\$args" == *"--method DELETE"* && "\$args" == *"installations"* ]]; then
+  echo "repo-removed" >> "\$REMOVED_LOG"
+  exit 0
+fi
+
+# Delete a ruleset by ID
+if [[ "\$args" == *"--method DELETE"* && "\$args" == *"rulesets"* ]]; then
+  echo "ruleset-deleted" >> "\$DELETED_RULESET_LOG"
+  exit 0
+fi
+
+# GET rulesets for TARGET_REPO — mock applies jq result directly:
+#   args with "length" = audit count query  → output count integer
+#   args with ".id"    = _old_ruleset_id    → output ID or nothing
+if [[ "\$args" == *"/repos/${TEST_OWNER}/testrepo/rulesets"* && "\$args" != *"--method POST"* ]]; then
+  if [[ "${ruleset_state}" == "has-existing-ruleset" ]]; then
+    if [[ "\$args" == *"length"* ]];   then printf '1'; \
+    elif [[ "\$args" == *".id"* ]];    then printf '42'; \
+    else printf '[{"name":"agent-blocked-from-non-agent-branches","id":42}]'; fi
+  else
+    # no existing ruleset: length=0, .id=<empty>
+    [[ "\$args" == *"length"* ]] && printf '0' || true
+  fi
+  exit 0
+fi
+
+# GET rulesets for other repos (audit) — none found; output jq result directly
+if [[ "\$args" == *"rulesets"* && "\$args" != *"--method POST"* ]]; then
+  [[ "\$args" == *"length"* ]] && printf '0' || true
+  exit 0
+fi
+
 if [[ "\$args" == *"--method POST"* && "\$args" == *"rulesets"* ]]; then
   echo "ruleset-created" >> "\$RULESET_LOG"
   printf '{"id":1}'
   exit 0
 fi
 
-if [[ "\$args" == *"/user/installations"* ]]; then
-  printf '%s' "${install_id}"
+# List user installations — for bypass_actors building
+# Returns one "other" app (id!=TEST_APP_ID) with all-repos access
+if [[ "\$args" == *"/user/installations"* && "\$args" == *"per_page"* ]]; then
+  printf '{"installations":[{"id":77,"app_id":12345,"repository_selection":"all"}]}'
   exit 0
 fi
 
-if [[ "\$args" == *".id"* && "\$args" != *"select"* ]]; then
-  printf '101'
+# Check repos for a specific installation (selected-repos case)
+if [[ "\$args" == *"/user/installations"* && "\$args" == *"/repositories"* ]]; then
+  printf '{"repositories":[]}'
   exit 0
 fi
 
@@ -330,25 +371,54 @@ GHEOF
   chmod +x "$mock_path"
 }
 
+# Write the curl mock used by both run_onboard and run_onboard_exit.
+# $1 = bin dir, $2 = audit_state
+write_mock_curl() {
+  local bin_dir="$1" audit_state="${2:-clean}"
+  local repos_json
+  if [[ "$audit_state" == "has-unprotected" ]]; then
+    repos_json='{"repositories":[{"id":999,"full_name":"'"${TEST_OWNER}/badrepo"'"}]}'
+  else
+    repos_json='{"repositories":[]}'
+  fi
+  cat > "${bin_dir}/curl" << CURLEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"/app/installations"* && "\$*" != *"access_tokens"* ]]; then
+  printf '[{"id":55}]'
+elif [[ "\$*" == *"access_tokens"* ]]; then
+  printf '{"token":"ghs_mocktoken"}'
+elif [[ "\$*" == *"/installation/repositories"* ]]; then
+  printf '%s' '${repos_json}'
+else
+  command curl "\$@"
+fi
+CURLEOF
+  chmod +x "${bin_dir}/curl"
+}
+
 run_onboard() {
-  rm -f "$TMPDIR_T/rulesets.log"
+  rm -f "$TMPDIR_T/rulesets.log" "$TMPDIR_T/removed.log" "$TMPDIR_T/deleted_ruleset.log"
   ONBOARD_BIN="$TMPDIR_T/onboard-bin"
   mkdir -p "$ONBOARD_BIN"
   cp "$1" "$ONBOARD_BIN/gh"
+  write_mock_curl "$ONBOARD_BIN" "${4:-clean}"
   PATH_CLEAN=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v "^$MOCK_BIN$" | tr '\n' ':' | sed 's/:$//')
   PATH="$ONBOARD_BIN:$PATH_CLEAN" bash "$TEST_ONBOARD" "$2" 2>&1 || true
 }
 
 run_onboard_exit() {
-  rm -f "$TMPDIR_T/rulesets.log"
+  rm -f "$TMPDIR_T/rulesets.log" "$TMPDIR_T/removed.log" "$TMPDIR_T/deleted_ruleset.log"
   ONBOARD_BIN="$TMPDIR_T/onboard-bin"
   mkdir -p "$ONBOARD_BIN"
   cp "$1" "$ONBOARD_BIN/gh"
+  write_mock_curl "$ONBOARD_BIN" "${4:-clean}"
   PATH_CLEAN=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v "^$MOCK_BIN$" | tr '\n' ':' | sed 's/:$//')
   PATH="$ONBOARD_BIN:$PATH_CLEAN" bash "$TEST_ONBOARD" "$2" > /dev/null 2>&1; echo $?
 }
 
-ruleset_count() { wc -l < "$TMPDIR_T/rulesets.log" 2>/dev/null | tr -d ' ' || echo 0; }
+ruleset_count()         { [[ -f "$TMPDIR_T/rulesets.log"         ]] && wc -l < "$TMPDIR_T/rulesets.log"         | tr -d ' ' || echo 0; }
+removed_count()         { [[ -f "$TMPDIR_T/removed.log"           ]] && wc -l < "$TMPDIR_T/removed.log"           | tr -d ' ' || echo 0; }
+deleted_ruleset_count() { [[ -f "$TMPDIR_T/deleted_ruleset.log"   ]] && wc -l < "$TMPDIR_T/deleted_ruleset.log"   | tr -d ' ' || echo 0; }
 
 # ── onboard: no arguments → usage error ───────────────────────────────────────
 
@@ -371,24 +441,57 @@ write_mock_gh "$MOCK_GH_OWN" "exists" "has-install"
 OWN_OUTPUT=$(run_onboard "$MOCK_GH_OWN" "${TEST_OWNER}/testrepo")
 OWN_EXIT=$(run_onboard_exit "$MOCK_GH_OWN" "${TEST_OWNER}/testrepo")
 
+# ── onboard: short form (no owner) uses current owner ────────────────────────
+
+MOCK_GH_SHORT="$TMPDIR_T/gh-short"
+write_mock_gh "$MOCK_GH_SHORT" "exists" "has-install"
+
+SHORT_EXIT=$(run_onboard_exit "$MOCK_GH_SHORT" "testrepo")
+
+[[ "$SHORT_EXIT" == "0" ]] \
+  && ok  "onboard short-form: exits 0" \
+  || fail "onboard short-form: exits 0 (got $SHORT_EXIT)"
+
+SHORT_RULESETS=$(ruleset_count)
+[[ "$SHORT_RULESETS" == "1" ]] \
+  && ok  "onboard short-form: one ruleset created" \
+  || fail "onboard short-form: one ruleset created (got $SHORT_RULESETS)"
+
 [[ "$OWN_EXIT" == "0" ]] \
   && ok  "onboard own-repo: exits 0" \
   || fail "onboard own-repo: exits 0 (got $OWN_EXIT)"
 
 OWN_RULESETS=$(ruleset_count)
-[[ "$OWN_RULESETS" == "2" ]] \
-  && ok  "onboard own-repo: two rulesets created" \
-  || fail "onboard own-repo: two rulesets created (got $OWN_RULESETS)"
+[[ "$OWN_RULESETS" == "1" ]] \
+  && ok  "onboard own-repo: one ruleset created" \
+  || fail "onboard own-repo: one ruleset created (got $OWN_RULESETS)"
 
-printf '%s' "$OWN_OUTPUT" | grep -q "agent blocked from all branches" \
-  && ok  "onboard own-repo: output confirms block-all ruleset" \
-  || fail "onboard own-repo: output confirms block-all ruleset"
+printf '%s' "$OWN_OUTPUT" | grep -q "agent blocked from" \
+  && ok  "onboard own-repo: output confirms ruleset" \
+  || fail "onboard own-repo: output confirms ruleset"
 
-printf '%s' "$OWN_OUTPUT" | grep -q "agent allowed on" \
-  && ok  "onboard own-repo: output confirms allow-agent ruleset" \
-  || fail "onboard own-repo: output confirms allow-agent ruleset"
+# ── onboard: unprotected repo in installation is removed ─────────────────────
 
-# ── onboard: external repo with existing valid fork ───────────────────────────
+MOCK_GH_AUDIT="$TMPDIR_T/gh-audit"
+write_mock_gh "$MOCK_GH_AUDIT" "no-fork" "has-install" "has-unprotected"
+
+AUDIT_OUTPUT=$(run_onboard "$MOCK_GH_AUDIT" "${TEST_OWNER}/testrepo" "" "has-unprotected")
+AUDIT_EXIT=$(run_onboard_exit "$MOCK_GH_AUDIT" "${TEST_OWNER}/testrepo" "" "has-unprotected")
+
+[[ "$AUDIT_EXIT" == "0" ]] \
+  && ok  "onboard audit: exits 0" \
+  || fail "onboard audit: exits 0 (got $AUDIT_EXIT)"
+
+AUDIT_REMOVED=$(removed_count)
+[[ "$AUDIT_REMOVED" == "1" ]] \
+  && ok  "onboard audit: unprotected repo removed from installation" \
+  || fail "onboard audit: unprotected repo removed from installation (got $AUDIT_REMOVED)"
+
+printf '%s' "$AUDIT_OUTPUT" | grep -qi "missing branch protection" \
+  && ok  "onboard audit: warning printed for removed repo" \
+  || fail "onboard audit: warning printed for removed repo"
+
+# ── onboard: external repo where a fork already exists ────────────────────────
 
 MOCK_GH_EXT="$TMPDIR_T/gh-ext"
 write_mock_gh "$MOCK_GH_EXT" "exists" "has-install"
@@ -396,13 +499,17 @@ write_mock_gh "$MOCK_GH_EXT" "exists" "has-install"
 EXT_OUTPUT=$(run_onboard "$MOCK_GH_EXT" "otherowner/extrepo")
 EXT_EXIT=$(run_onboard_exit "$MOCK_GH_EXT" "otherowner/extrepo")
 
-[[ "$EXT_EXIT" == "0" ]] \
-  && ok  "onboard external-fork-exists: exits 0" \
-  || fail "onboard external-fork-exists: exits 0 (got $EXT_EXIT)"
+[[ "$EXT_EXIT" != "0" ]] \
+  && ok  "onboard external-fork-exists: exits non-zero" \
+  || fail "onboard external-fork-exists: exits non-zero (got $EXT_EXIT)"
 
-printf '%s' "$EXT_OUTPUT" | grep -q "existing fork" \
-  && ok  "onboard external-fork-exists: reports using existing fork" \
-  || fail "onboard external-fork-exists: reports using existing fork"
+printf '%s' "$EXT_OUTPUT" | grep -q "fork already exists" \
+  && ok  "onboard external-fork-exists: error mentions existing fork" \
+  || fail "onboard external-fork-exists: error mentions existing fork"
+
+printf '%s' "$EXT_OUTPUT" | grep -q "${TEST_OWNER}/extrepo" \
+  && ok  "onboard external-fork-exists: error suggests passing fork directly" \
+  || fail "onboard external-fork-exists: error suggests passing fork directly"
 
 # ── onboard: same-named repo exists but is NOT a fork ────────────────────────
 
@@ -420,21 +527,32 @@ printf '%s' "$NOTFORK_OUTPUT" | grep -qi "not a fork" \
   && ok  "onboard collision-not-fork: error mentions 'not a fork'" \
   || fail "onboard collision-not-fork: error mentions 'not a fork'"
 
-# ── onboard: no installation found ───────────────────────────────────────────
 
-MOCK_GH_NOINST="$TMPDIR_T/gh-noinst"
-write_mock_gh "$MOCK_GH_NOINST" "exists" "no-install"
+# ── onboard: existing same-named ruleset is replaced ─────────────────────────
 
-NOINST_OUTPUT=$(run_onboard "$MOCK_GH_NOINST" "${TEST_OWNER}/testrepo")
-NOINST_EXIT=$(run_onboard_exit "$MOCK_GH_NOINST" "${TEST_OWNER}/testrepo")
+MOCK_GH_REPLACE="$TMPDIR_T/gh-replace"
+write_mock_gh "$MOCK_GH_REPLACE" "exists" "has-install" "has-existing-ruleset"
 
-[[ "$NOINST_EXIT" != "0" ]] \
-  && ok  "onboard no-installation: exits non-zero" \
-  || fail "onboard no-installation: exits non-zero"
+REPLACE_OUTPUT=$(run_onboard "$MOCK_GH_REPLACE" "${TEST_OWNER}/testrepo")
+REPLACE_EXIT=$(run_onboard_exit "$MOCK_GH_REPLACE" "${TEST_OWNER}/testrepo")
 
-printf '%s' "$NOINST_OUTPUT" | grep -qi "install" \
-  && ok  "onboard no-installation: error mentions installation" \
-  || fail "onboard no-installation: error mentions installation"
+[[ "$REPLACE_EXIT" == "0" ]] \
+  && ok  "onboard replace-ruleset: exits 0" \
+  || fail "onboard replace-ruleset: exits 0 (got $REPLACE_EXIT)"
+
+REPLACE_DELETED=$(deleted_ruleset_count)
+[[ "$REPLACE_DELETED" == "1" ]] \
+  && ok  "onboard replace-ruleset: old ruleset deleted" \
+  || fail "onboard replace-ruleset: old ruleset deleted (got $REPLACE_DELETED)"
+
+REPLACE_CREATED=$(ruleset_count)
+[[ "$REPLACE_CREATED" == "1" ]] \
+  && ok  "onboard replace-ruleset: new ruleset created" \
+  || fail "onboard replace-ruleset: new ruleset created (got $REPLACE_CREATED)"
+
+printf '%s' "$REPLACE_OUTPUT" | grep -qi "replacing existing" \
+  && ok  "onboard replace-ruleset: output mentions replacing" \
+  || fail "onboard replace-ruleset: output mentions replacing"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 

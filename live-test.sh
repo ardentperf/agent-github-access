@@ -35,10 +35,10 @@ done
 
 if [[ -z "$AGENT_OWNER" ]]; then
   RAW_PREFIX=$(gh api "/repos/${REPO}/rulesets" \
-    --jq '.[] | select(.name == "agent-allowed-on-agent-branches")
-               | .conditions.ref_name.include[0]' 2>/dev/null || true)
-  # RAW_PREFIX looks like "x-ai/alice/**" → extract "alice"
-  AGENT_OWNER=$(printf '%s' "$RAW_PREFIX" | sed 's|x-ai/||; s|/\*\*||')
+    --jq '.[] | select(.name == "agent-blocked-from-non-agent-branches")
+               | .conditions.ref_name.exclude[0]' || true)
+  # RAW_PREFIX looks like "refs/heads/x-ai/alice/**" → extract "alice"
+  AGENT_OWNER=$(printf '%s' "$RAW_PREFIX" | sed 's|refs/heads/x-ai/||; s|/\*\*||')
 fi
 
 if [[ -z "$AGENT_OWNER" ]]; then
@@ -50,7 +50,7 @@ fi
 
 # ── Resolve default branch ────────────────────────────────────────────────────
 
-DEFAULT_BRANCH=$(gh api "/repos/${REPO}" --jq '.default_branch' 2>/dev/null || true)
+DEFAULT_BRANCH=$(gh api "/repos/${REPO}" --jq '.default_branch' || true)
 if [[ -z "$DEFAULT_BRANCH" ]]; then
   echo "Error: could not fetch repo info for '${REPO}'. Check the repo name." >&2
   exit 1
@@ -146,7 +146,7 @@ fi
 # ── Cleanup: delete the test branch ───────────────────────────────────────────
 
 if [[ -n "$PUSHED_AGENT_BRANCH" ]]; then
-  if git push --quiet origin --delete "$PUSHED_AGENT_BRANCH" 2>/dev/null; then
+  if git push --quiet origin --delete "$PUSHED_AGENT_BRANCH"; then
     echo ""
     echo "Cleaned up: deleted ${PUSHED_AGENT_BRANCH}"
   else

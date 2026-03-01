@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PORT=9876
 
 # ── Dependencies ────────────────────────────────────────────────────────────
 for cmd in gh jq python3; do
@@ -15,8 +14,8 @@ done
 if [[ $# -gt 0 ]]; then
   export GH_USER="$1"
 else
-  # gh auth list format: "github.com  username  (active)"
-  ACCOUNTS=$(gh auth list 2>/dev/null | awk '/github\.com/{found=1; next} found && /^\s/{print $1} found && /^[^\s]/{found=0}' | grep -v '^$' || true)
+  # gh auth status output: "  ✓ Logged in to github.com account USERNAME (keyring)"
+  ACCOUNTS=$(gh auth status 2>&1 | sed -n 's/.*Logged in to github\.com account \([^ ]*\).*/\1/p' | grep -v '^$' || true)
   COUNT=$(echo "$ACCOUNTS" | grep -c '[^[:space:]]' || true)
   if [[ "$COUNT" -gt 1 ]]; then
     echo "Multiple GitHub accounts are authenticated. Rerun with the account to use:" >&2
@@ -44,6 +43,11 @@ echo ""
 #   pull_requests: "write"   open, update, and merge pull requests
 #   issues:        "write"   create and update issue comments
 
+# ── Find a free port ─────────────────────────────────────────────────────────
+# Ask the OS for a free port, release it, then bind the server to it.
+# The window between releasing and binding is negligible for a local tool.
+PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('localhost',0)); p=s.getsockname()[1]; s.close(); print(p)")
+
 # ── Manifest ─────────────────────────────────────────────────────────────────
 MANIFEST=$(jq -n \
   --arg name "$APP_NAME" \
@@ -54,6 +58,7 @@ MANIFEST=$(jq -n \
     url:          $url,
     redirect_url: $cb,
     public:       false,
+    hook_attributes: { url: "https://example.com", active: false },
     default_permissions: {
       metadata:      "read",    # required by all apps
       contents:      "write",   # push commits; create/delete branches
@@ -76,50 +81,109 @@ mv "$TMPBASE" "$TMPHTML"
 CODEFILE=$(mktemp "${TMPDIR:-/tmp}/gh-app-code-XXXXXX")
 trap 'rm -f "$TMPHTML" "$CODEFILE"' EXIT
 
-# ── HTML page that auto-submits the manifest form to GitHub ──────────────────
-python3 - "$MANIFEST" "$TMPHTML" <<'PYEOF'
+# ── HTML page: instructions + manifest form with a submit button ──────────────
+python3 - "$MANIFEST" "$APP_NAME" "$USERNAME" "$TMPHTML" <<'PYEOF'
 import sys, html
-manifest, outfile = sys.argv[1], sys.argv[2]
+manifest, app_name, username, outfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 escaped = html.escape(manifest, quote=True)
 with open(outfile, 'w') as f:
-    f.write(f"""<!DOCTYPE html>
-<html><body>
-<p>Submitting app manifest to GitHub…</p>
-<form method="post" action="https://github.com/settings/apps/new" id="f">
+    f.write(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+body{{font-family:sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fff;color:#111}}
+@media(prefers-color-scheme:dark){{body{{background:#1a1a1a;color:#eee}}}}
+.card{{max-width:480px;padding:2rem}}
+h2{{margin-top:0}}
+ol{{padding-left:1.3em;line-height:1.8}}
+code{{font-size:.95em;background:rgba(128,128,128,.15);padding:.1em .35em;border-radius:3px}}
+.warn{{margin-top:1rem;padding:.75rem 1rem;border-left:3px solid #d29922;background:rgba(210,153,34,.1);border-radius:0 4px 4px 0}}
+.btn{{display:inline-block;margin-top:1.5rem;padding:.65rem 1.4rem;background:#238636;color:#fff;border:none;border-radius:6px;font-size:1rem;font-weight:600;cursor:pointer}}
+.btn:hover{{background:#2ea043}}
+</style>
+</head><body><div class="card">
+<h2>Create GitHub App</h2>
+<p>This will create a GitHub App named <code>{app_name}</code> on your account.</p>
+<ol>
+<li>Click <strong>Create App on GitHub</strong> below</li>
+<li>On the GitHub page, click <strong>Create GitHub App for {username}</strong></li>
+<li>You will be returned here with next steps</li>
+</ol>
+<div class="warn">&#9888; Do not change the app name on the GitHub page.<br>
+The name <code>{app_name}</code> must stay exactly as shown.</div>
+<form method="post" action="https://github.com/settings/apps/new">
   <input type="hidden" name="manifest" value="{escaped}">
+  <button type="submit" class="btn">Create App on GitHub &#8594;</button>
 </form>
-<script>document.getElementById('f').submit();</script>
-</body></html>""")
+</div></body></html>""")
 PYEOF
 
-# ── One-shot local server to catch the callback code ─────────────────────────
-python3 - "$CODEFILE" "$PORT" <<'PYEOF' &
-import sys, http.server, urllib.parse
-codefile, port = sys.argv[1], int(sys.argv[2])
+# ── Local server: serves the manifest page and catches the callback code ──────
+# Serving via HTTP sidesteps file:// restrictions in snap-sandboxed browsers.
+# APP_NAME is used as the slug — GitHub lowercases and hyphenates the name,
+# which it already is, so the install URL is predictable before app creation.
+INSTALL_URL="https://github.com/apps/${APP_NAME}/installations/new"
+
+python3 - "$CODEFILE" "$PORT" "$TMPHTML" "$INSTALL_URL" <<'PYEOF' &
+import sys, http.server, urllib.parse, os
+codefile, port, htmlfile, install_url = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+
+done_html = (
+    '<!DOCTYPE html><html><head><meta charset="utf-8">'
+    '<style>'
+    'body{font-family:sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fff;color:#111}'
+    '@media(prefers-color-scheme:dark){body{background:#1a1a1a;color:#eee}}'
+    '.card{max-width:480px;padding:2rem;}'
+    'h2{margin-top:0}'
+    'ol{padding-left:1.3em;line-height:1.8}'
+    'code{font-size:.95em;background:rgba(128,128,128,.15);padding:.1em .35em;border-radius:3px}'
+    '.btn{display:inline-block;margin-top:1.5rem;padding:.65rem 1.4rem;background:#238636;color:#fff;text-decoration:none;border-radius:6px;font-size:1rem;font-weight:600}'
+    '.btn:hover{background:#2ea043}'
+    '</style>'
+    '</head><body><div class="card">'
+    '<h2>&#10003; App created</h2>'
+    '<p>Click <strong>Install</strong> below, then on the GitHub page:</p>'
+    '<ol>'
+    '<li>Choose <strong>Only select repositories</strong></li>'
+    '<li>Select <strong>one repo</strong> you want the agent to use</li>'
+    '<li>Click <strong>Install</strong></li>'
+    '</ol>'
+    '<p>Then immediately run on this machine:</p>'
+    f'<p><code>./onboard-repo.sh &lt;repo&gt;</code></p>'
+    f'<a class="btn" href="{install_url}">Install on GitHub &#8594;</a>'
+    '</div></body></html>'
+).encode()
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        code = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get('code', [''])[0]
-        self.send_response(200)
-        self.send_header('Content-Type', 'text/html')
-        self.end_headers()
-        self.wfile.write(b'<html><body><h2>Done &#10003; You can close this tab.</h2></body></html>')
-        with open(codefile, 'w') as f:
-            f.write(code)
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == '/callback':
+            code = urllib.parse.parse_qs(parsed.query).get('code', [''])[0]
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.end_headers()
+            self.wfile.write(done_html)
+            if code:
+                with open(codefile, 'w') as f: f.write(code)
+        else:
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.end_headers()
+            with open(htmlfile, 'rb') as f: self.wfile.write(f.read())
     def log_message(self, *a): pass
 
-http.server.HTTPServer(('localhost', port), Handler).handle_request()
+server = http.server.HTTPServer(('localhost', port), Handler)
+while not (os.path.exists(codefile) and os.path.getsize(codefile) > 0):
+    server.handle_request()
 PYEOF
 SERVER_PID=$!
 
 # ── Open browser ──────────────────────────────────────────────────────────────
 if command -v xdg-open &>/dev/null; then
-    xdg-open "file://$TMPHTML" 2>/dev/null
+    xdg-open "http://localhost:${PORT}/"
 elif command -v open &>/dev/null; then
-    open "file://$TMPHTML"
+    open "http://localhost:${PORT}/"
 else
-    echo "Could not detect a browser opener. Open this file manually:"
-    echo "  file://$TMPHTML"
+    echo "Could not detect a browser opener. Open this URL manually:"
+    echo "  http://localhost:${PORT}/"
 fi
 
 echo "Waiting for you to confirm app creation in your browser…"
@@ -230,11 +294,10 @@ PROTECTED_IDS=$(
         -H "Authorization: Bearer $BROAD_TOKEN" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        "https://api.github.com/repos/${full_name}/rulesets" 2>/dev/null \
-        | jq '[.[] | select(.name == "agent-blocked-from-all-branches"
-                          or .name == "agent-allowed-on-agent-branches")] | length' \
-        2>/dev/null || echo "0")
-      if [[ "${count:-0}" -eq 2 ]]; then
+        "https://api.github.com/repos/${full_name}/rulesets" \
+        | jq '[.[] | select(.name == "agent-blocked-from-non-agent-branches")] | length' \
+        || echo "0")
+      if [[ "${count:-0}" -eq 1 ]]; then
         printf '%s\n' "$repo_id"
       else
         printf 'Warning: %s is missing branch protection rulesets — excluded.\n' \
@@ -264,18 +327,18 @@ TOKEN=$(curl -sf -X POST \
 git config --global credential.https://github.com.helper store
 CRED_FILE="${HOME}/.git-credentials"
 TMPCRED=$(mktemp "${TMPDIR:-/tmp}/git-cred-XXXXXX")
-grep -v '@github\.com' "$CRED_FILE" 2>/dev/null > "$TMPCRED" || true
+grep -v '@github\.com' "$CRED_FILE" > "$TMPCRED" || true
 printf 'https://x-access-token:%s@github.com\n' "$TOKEN" >> "$TMPCRED"
 mv "$TMPCRED" "$CRED_FILE"
 chmod 600 "$CRED_FILE"
 
 # ── Configure gh CLI (if present) ────────────────────────────────────────────
 if command -v gh &>/dev/null; then
-  printf '%s' "$TOKEN" | gh auth login --hostname github.com --with-token 2>/dev/null || true
+  printf '%s' "$TOKEN" | gh auth login --hostname github.com --with-token || true
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
-SCRIPT_PATH=$(realpath "$0" 2>/dev/null || printf '%s' "$0")
+SCRIPT_PATH=$(realpath "$0" || printf '%s' "$0")
 echo ""
 echo "GitHub credentials configured. Token expires in ~1 hour."
 echo ""
@@ -305,9 +368,9 @@ chmod 700 "$OUTFILE"
 # ── Generate onboard-repo.sh ──────────────────────────────────────────────────
 ONBOARD_SCRIPT="onboard-repo.sh"
 
-python3 - "$APP_ID" "$USERNAME" "$ONBOARD_SCRIPT" << 'PYEOF'
+python3 - "$APP_ID" "$PEM_B64" "$USERNAME" "$ONBOARD_SCRIPT" << 'PYEOF'
 import sys
-app_id, owner_login, outfile = sys.argv[1], sys.argv[2], sys.argv[3]
+app_id, pem_b64, owner_login, outfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 header = (
     '#!/usr/bin/env bash\n'
@@ -315,27 +378,33 @@ header = (
     '# the agent app access. For repos outside the agent owner\'s account the repo\n'
     '# is forked first. Run this from your trusted machine for each repo.\n'
     '#\n'
-    '# Usage: ./onboard-repo.sh <owner/repo>\n'
+    '# Usage: ./onboard-repo.sh <repo> or ./onboard-repo.sh <owner/repo>\n'
     'set -euo pipefail\n'
     '\n'
     '# ── Embedded values ───────────────────────────────────────────────────────────\n'
     f'APP_ID="{app_id}"\n'
+    f'APP_PEM_B64="{pem_b64}"\n'
     f'OWNER_LOGIN="{owner_login}"\n'
 )
 
 body = r"""AGENT_BRANCH_PREFIX="x-ai/${OWNER_LOGIN}"
 
 if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 <owner/repo>" >&2
+  echo "Usage: $0 <repo> or $0 <owner/repo>" >&2
   exit 1
 fi
 
-INPUT_REPO="$1"
+# Accept plain repo name (no slash) and assume current owner
+if [[ "$1" == */* ]]; then
+  INPUT_REPO="$1"
+else
+  INPUT_REPO="${OWNER_LOGIN}/$1"
+fi
 INPUT_OWNER="${INPUT_REPO%%/*}"
 REPO_NAME="${INPUT_REPO##*/}"
 
 # ── Verify the source repo is accessible ─────────────────────────────────────
-if ! gh api "/repos/${INPUT_REPO}" --silent 2>/dev/null; then
+if ! gh api "/repos/${INPUT_REPO}" --silent; then
   echo "Error: cannot access '${INPUT_REPO}'. Check the repo name and your gh credentials." >&2
   exit 1
 fi
@@ -347,10 +416,12 @@ else
   echo "Repository is outside the agent owner's account (${OWNER_LOGIN})."
   FORK_REPO="${OWNER_LOGIN}/${REPO_NAME}"
 
-  if gh api "/repos/${FORK_REPO}" --silent 2>/dev/null; then
+  if gh api "/repos/${FORK_REPO}" --silent; then
     FORK_PARENT=$(gh api "/repos/${FORK_REPO}" --jq '.parent.full_name // empty')
     if [[ "$FORK_PARENT" == "$INPUT_REPO" ]]; then
-      echo "  Found existing fork: ${FORK_REPO}"
+      echo "Error: a fork already exists at ${FORK_REPO}." >&2
+      echo "  To onboard it, pass the fork directly: ./onboard-repo.sh ${FORK_REPO}" >&2
+      exit 1
     else
       echo "Error: ${FORK_REPO} already exists but is not a fork of ${INPUT_REPO}." >&2
       exit 1
@@ -366,7 +437,7 @@ else
     echo "  Waiting for fork to be ready..."
     for i in $(seq 1 12); do
       sleep 5
-      if gh api "/repos/${FORK_REPO}" --silent 2>/dev/null; then break; fi
+      if gh api "/repos/${FORK_REPO}" --silent; then break; fi
       if [[ "$i" -eq 12 ]]; then
         echo "Error: fork did not become available after 60 seconds." >&2; exit 1
       fi
@@ -376,61 +447,141 @@ else
   TARGET_REPO="$FORK_REPO"
 fi
 
+# ── Resolve installation ID via app JWT ──────────────────────────────────────
+APP_PEM=$(printf '%s' "$APP_PEM_B64" | base64 -d)
+
+b64url() { base64 | tr '+/' '-_' | tr -d '=\n'; }
+NOW=$(date +%s); EXP=$((NOW + 540))
+HEADER=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":%d}' "$NOW" "$EXP" "$APP_ID" | b64url)
+TMPKEY=$(mktemp); chmod 600 "$TMPKEY"; printf '%s' "$APP_PEM" > "$TMPKEY"
+SIG=$(printf '%s.%s' "$HEADER" "$PAYLOAD" | openssl dgst -binary -sha256 -sign "$TMPKEY" | b64url)
+rm -f "$TMPKEY"
+JWT="${HEADER}.${PAYLOAD}.${SIG}"
+
+INSTALL_ID=$(curl -sf \
+  -H "Authorization: Bearer ${JWT}" \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/app/installations" \
+  | jq -r '.[0].id // empty')
+
+if [[ -z "$INSTALL_ID" ]]; then
+  echo "Error: no installation found for this app. Install the app on GitHub first." >&2
+  exit 1
+fi
+
+# Get an installation access token (needed to list repos via the app identity)
+INSTALL_TOKEN=$(curl -sf \
+  -X POST \
+  -H "Authorization: Bearer ${JWT}" \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" \
+  | jq -r '.token // empty')
+
+# ── Audit: remove installed repos missing expected branch rules ───────────────
+# Any repo granted to this installation without both agent rulesets is
+# unprotected — the app could push to any branch. Remove such repos now.
+INSTALLED=$(curl -sf \
+  -H "Authorization: token ${INSTALL_TOKEN}" \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/installation/repositories" \
+  | jq -r '.repositories[] | "\(.id) \(.full_name)"' || true)
+
+if [[ -n "$INSTALLED" ]]; then
+  while IFS=' ' read -r rid rname; do
+    [[ -z "$rname" || ! "$rname" == */* ]] && continue
+    [[ "$rname" == "$TARGET_REPO" ]] && continue
+    HAS_RULESET=$(gh api "/repos/${rname}/rulesets" \
+      --jq '[.[] | select(.name == "agent-blocked-from-non-agent-branches")] | length' || echo 0)
+    if [[ "$HAS_RULESET" == "0" ]]; then
+      echo "Warning: ${rname} is missing branch protection rules — removing from installation." >&2
+      gh api \
+        --method DELETE \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "/user/installations/${INSTALL_ID}/repositories/${rid}" \
+        --silent || true
+    fi
+  done <<< "$INSTALLED"
+fi
+
 echo "Onboarding ${TARGET_REPO} for agent access..."
 echo "  Agent branch prefix: ${AGENT_BRANCH_PREFIX}/**"
 echo ""
 
-# ── Ruleset A: block agent app from all branches ──────────────────────────────
-# Repo admins always have implicit bypass, so this only restricts the app.
-# The app has no entry in bypass_actors, so it cannot create, update, or delete
-# any branch by default.
+# ── Remove any existing same-named ruleset (handles app re-creation) ──────────
+_old_ruleset_id=$(gh api "/repos/${TARGET_REPO}/rulesets" \
+  --jq '.[] | select(.name == "agent-blocked-from-non-agent-branches") | .id' \
+  | head -1 || true)
+if [[ -n "$_old_ruleset_id" ]]; then
+  echo "  Replacing existing ruleset..."
+  gh api \
+    --method DELETE \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "/repos/${TARGET_REPO}/rulesets/${_old_ruleset_id}" \
+    --silent
+fi
+
+# ── Single ruleset: block agent app from all branches except its own prefix ────
+# The agent prefix is in the exclude list, so the ruleset simply does not apply
+# there — no bypass_actors entry is needed for the agent app.
+# bypass_actors lists every other actor that should not be restricted:
+#   • RepositoryRole 2 = maintain, 4 = write, 5 = admin  (not hierarchical)
+#   • Every other GitHub App installed on this repo (CI, Dependabot, etc.)
+BYPASS_ACTORS=$(
+  # Seed with human roles
+  roles='[
+    {"actor_id":2,"actor_type":"RepositoryRole","bypass_mode":"always"},
+    {"actor_id":4,"actor_type":"RepositoryRole","bypass_mode":"always"},
+    {"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}
+  ]'
+
+  # Collect other app installations that have access to this repo
+  app_entries='[]'
+  while IFS=$'\t' read -r inst_id app_id repo_sel; do
+    [[ "$app_id" == "$APP_ID" ]] && continue
+    include=0
+    if [[ "$repo_sel" == "all" ]]; then
+      include=1
+    else
+      has=$(gh api "/user/installations/${inst_id}/repositories" \
+        --jq ".repositories[] | select(.full_name == \"${TARGET_REPO}\") | .id" \
+        || true)
+      [[ -n "$has" ]] && include=1
+    fi
+    if [[ "$include" == "1" ]]; then
+      entry=$(jq -n --argjson id "$app_id" \
+        '{"actor_id":$id,"actor_type":"Integration","bypass_mode":"always"}')
+      app_entries=$(jq -n --argjson a "$app_entries" --argjson e "$entry" '$a + [$e]')
+    fi
+  done < <(gh api "/user/installations?per_page=100" \
+    --jq '.installations[] | [.id, .app_id, .repository_selection] | @tsv' \
+    2>/dev/null || true)  # 403 expected — user token lacks installation scope
+
+  jq -n --argjson r "$roles" --argjson a "$app_entries" '$r + $a'
+)
+
 gh api \
   --method POST \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   "/repos/${TARGET_REPO}/rulesets" \
+  --silent \
   --input - << EOF
 {
-  "name": "agent-blocked-from-all-branches",
+  "name": "agent-blocked-from-non-agent-branches",
   "target": "branch",
   "enforcement": "active",
-  "bypass_actors": [],
+  "bypass_actors": ${BYPASS_ACTORS},
   "conditions": {
-    "ref_name": { "include": ["~ALL"], "exclude": [] }
-  },
-  "rules": [
-    { "type": "creation" },
-    { "type": "update"   },
-    { "type": "deletion" }
-  ]
-}
-EOF
-
-echo "  ✓ Ruleset A: agent blocked from all branches"
-
-# ── Ruleset B: allow agent app to bypass on its own branch prefix ─────────────
-# The app is in bypass_actors for this ruleset, so it can create, update, and
-# delete branches matching x-ai/{owner}/**.  All other actors remain subject
-# to Ruleset A for these same branches.
-gh api \
-  --method POST \
-  -H "Accept: application/vnd.github+json" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  "/repos/${TARGET_REPO}/rulesets" \
-  --input - << EOF
-{
-  "name": "agent-allowed-on-agent-branches",
-  "target": "branch",
-  "enforcement": "active",
-  "bypass_actors": [
-    {
-      "actor_id": ${APP_ID},
-      "actor_type": "Integration",
-      "bypass_mode": "always"
+    "ref_name": {
+      "include": ["~ALL"],
+      "exclude": ["refs/heads/${AGENT_BRANCH_PREFIX}/**"]
     }
-  ],
-  "conditions": {
-    "ref_name": { "include": ["${AGENT_BRANCH_PREFIX}/**"], "exclude": [] }
   },
   "rules": [
     { "type": "creation" },
@@ -440,29 +591,21 @@ gh api \
 }
 EOF
 
-echo "  ✓ Ruleset B: agent allowed on ${AGENT_BRANCH_PREFIX}/**"
+echo "  ✓ Ruleset: agent blocked from all branches except ${AGENT_BRANCH_PREFIX}/**"
 
 # ── Add repo to the app installation ─────────────────────────────────────────
 # Branch protection is now in place. Only after that do we grant the app access
 # to this repo by adding it to the installation. This ensures the app is never
 # active on a repo that lacks the branch protection rules.
 REPO_ID=$(gh api "/repos/${TARGET_REPO}" --jq '.id')
-INSTALL_ID=$(gh api "/user/installations" \
-  --jq ".installations[] | select(.app_id == ${APP_ID}) | .id")
-
-if [[ -z "$INSTALL_ID" ]]; then
-  echo "" >&2
-  echo "Error: could not find an installation for this app on your account." >&2
-  echo "  Install the app first using the setup script on your trusted machine." >&2
-  exit 1
-fi
 
 gh api \
   --method PUT \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   "/user/installations/${INSTALL_ID}/repositories/${REPO_ID}" \
-  --silent
+  --silent 2>/dev/null || true  # 403 expected — standard gh token lacks write:org scope;
+                                # repo is added via the GitHub App install UI instead
 
 echo "  ✓ Repo added to app installation"
 echo ""
@@ -487,22 +630,17 @@ echo "  ID:   ${APP_ID}"
 echo "  Slug: ${APP_SLUG}"
 echo ""
 echo "Generated scripts:"
-echo "  ${OUTFILE}       — copy to the agent's \$HOME and run as ~/authenticate-github.sh"
-echo "  ${ONBOARD_SCRIPT}    — run on this machine per repo to expand agent access"
+echo "  ${OUTFILE}     — copy to the agent's \$HOME"
+echo "  ${ONBOARD_SCRIPT} — run on this machine per repo to grant agent access"
 echo ""
-echo "Opening browser to install the app on your account…"
-echo "  IMPORTANT: on the GitHub page, choose 'Only select repositories'"
-echo "  and do NOT select any repositories. Leave the list empty and click Install."
-echo "  Use onboard-repo.sh to add repositories — it sets up branch rules"
-echo "  first, then grants the app access. The app will have no access to any"
-echo "  repo until onboard-repo.sh has been run for that repo."
+echo "Next steps:"
+echo "  1. A browser will open to install the app. Choose 'Only select repositories',"
+echo "     select one repo, and click Install."
+echo "  2. Immediately run: ./onboard-repo.sh <repo>"
+echo "     This sets up branch protection rules on that repo."
+echo "  3. Repeat step 2 for each additional repo."
+echo "  4. Copy ${OUTFILE} to the agent: scp ${OUTFILE} user@agent-host:~/"
 echo ""
-INSTALL_URL="https://github.com/apps/${APP_SLUG}/installations/new"
-if command -v xdg-open &>/dev/null; then
-    xdg-open "$INSTALL_URL" 2>/dev/null
-elif command -v open &>/dev/null; then
-    open "$INSTALL_URL"
-else
-    echo "  Could not open browser. Install manually at:"
-    echo "  ${INSTALL_URL}"
-fi
+echo "The browser tab will redirect to the installation page automatically."
+echo "If it does not, install manually at:"
+echo "  ${INSTALL_URL}"
