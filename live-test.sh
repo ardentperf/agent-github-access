@@ -2,8 +2,18 @@
 # live-test.sh — confirms real GitHub branch permissions on an onboarded repo.
 #
 # Run this from an agent machine after authenticate-github.sh has been executed.
-# It clones the repo, makes a scratch commit, then pushes to several branch
-# targets — confirming which are allowed and which are blocked by the rulesets.
+# It tests branch-level push restrictions and commit identity enforcement:
+#
+#   Branch restrictions (agent-blocked-from-non-agent-branches ruleset):
+#     - push to default branch          → must be blocked
+#     - push to non-prefixed branch     → must be blocked
+#     - push to wrong-owner prefix      → must be blocked
+#
+#   Commit identity (required_signatures ruleset on agent branches):
+#     - unsigned commit                 → must be blocked
+#     - wrong author email              → must be blocked
+#     - wrong committer email           → must be blocked
+#     - API-created commit (bot-signed) → must succeed
 #
 # Usage:
 #   ./live-test.sh <owner/repo>
@@ -74,6 +84,20 @@ ERRORS=()
 ok()   { PASS=$((PASS+1)); printf "PASS  %s\n" "$1"; }
 fail() { FAIL=$((FAIL+1)); ERRORS+=("$1"); printf "FAIL  %s\n" "$1"; }
 
+# Resolve the app ID and bot email from the current git global config so the
+# tests can construct both the correct and incorrect identity variants.
+BOT_EMAIL=$(git config --global user.email || true)
+BOT_NAME=$(git config --global user.name  || true)
+APP_ID=$(printf '%s' "$BOT_EMAIL" | cut -d'+' -f1)
+
+if [[ -z "$BOT_EMAIL" || -z "$APP_ID" ]]; then
+  echo "Error: git global identity not configured." >&2
+  echo "  Run authenticate-github.sh first." >&2
+  exit 1
+fi
+
+WRONG_EMAIL="attacker@example.com"
+
 # Clone into a temp dir; removed on exit even if the script errors out.
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -81,15 +105,7 @@ trap 'rm -rf "$WORKDIR"' EXIT
 git clone --quiet --depth 1 "https://github.com/${REPO}.git" "$WORKDIR/repo"
 cd "$WORKDIR/repo"
 
-# Configure git identity for the test commit (required even without signing).
-git config user.email "live-test@agent-live-test.invalid"
-git config user.name  "Agent Live Test"
-
-# Make a scratch commit to push around.
 TS=$(date +%s)
-printf 'live-test %s\n' "$TS" > .agent-live-test
-git add .agent-live-test
-git commit --quiet -m "live-test: permission check (${TS})"
 
 # Branch names used in the tests.
 AGENT_BRANCH="x-ai/${AGENT_OWNER}/live-test-${TS}"
@@ -98,23 +114,34 @@ WRONG_PREFIX="x-ai/not-${AGENT_OWNER}/live-test-${TS}"
 
 PUSHED_AGENT_BRANCH=""
 
-# Helper: attempt a push and capture stderr for display on failures.
+# Helper: attempt a push and capture stderr.
 try_push() {
   local target="$1"
   git push --quiet origin "HEAD:${target}" 2>"$WORKDIR/push.err"
 }
 
-# ── Test: push to agent branch → must succeed ─────────────────────────────────
-
-if try_push "$AGENT_BRANCH"; then
-  ok  "push to agent branch allowed   (x-ai/${AGENT_OWNER}/…)"
-  PUSHED_AGENT_BRANCH="$AGENT_BRANCH"
-else
-  fail "push to agent branch allowed   (x-ai/${AGENT_OWNER}/…)"
-  echo "     $(cat "$WORKDIR/push.err")"
-fi
+# Helper: make a scratch commit with configurable identity, then try to push.
+# Usage: try_push_as <branch> <email> <name>
+try_push_as() {
+  local target="$1" email="$2" name="$3"
+  git config user.email "$email"
+  git config user.name  "$name"
+  printf 'live-test %s\n' "$TS" > .agent-live-test
+  git add .agent-live-test
+  git commit --quiet --allow-empty -m "live-test: identity check (${TS})"
+  try_push "$target"
+  local rc=$?
+  git reset --quiet HEAD~1
+  return $rc
+}
 
 # ── Test: push to default branch → must be blocked ────────────────────────────
+
+git config user.email "$BOT_EMAIL"
+git config user.name  "$BOT_NAME"
+printf 'live-test %s\n' "$TS" > .agent-live-test
+git add .agent-live-test
+git commit --quiet -m "live-test: permission check (${TS})"
 
 if try_push "$DEFAULT_BRANCH"; then
   fail "push to ${DEFAULT_BRANCH} was NOT blocked  ← security issue"
@@ -123,8 +150,6 @@ else
   if printf '%s' "$GH_ERR" | grep -qi "rule\|protect\|denied\|not allowed\|cannot"; then
     ok  "push to ${DEFAULT_BRANCH} blocked by ruleset"
   else
-    # Push failed but not with a recognisable ruleset message — still a pass
-    # because the push was rejected, but flag the unexpected message.
     ok  "push to ${DEFAULT_BRANCH} blocked (unexpected error: $(head -1 "$WORKDIR/push.err"))"
   fi
 fi
@@ -138,8 +163,6 @@ else
 fi
 
 # ── Test: push to a different agent owner's prefix → must be blocked ──────────
-# The exclude condition only covers x-ai/${AGENT_OWNER}/**.
-# Another owner's prefix is still within the ruleset's scope and must be blocked.
 
 if try_push "$WRONG_PREFIX"; then
   fail "push to wrong-owner prefix was NOT blocked  ← security issue"
@@ -147,10 +170,78 @@ else
   ok  "push to wrong-owner prefix blocked   (x-ai/not-${AGENT_OWNER}/…)"
 fi
 
+# ── Test: unsigned commit to agent branch → must be blocked ───────────────────
+# git commit produces an unsigned commit; required_signatures must reject it.
+
+if try_push_as "$AGENT_BRANCH" "$BOT_EMAIL" "$BOT_NAME"; then
+  fail "unsigned commit to agent branch was NOT blocked  ← security issue"
+  echo "     $(cat "$WORKDIR/push.err")"
+else
+  GH_ERR=$(cat "$WORKDIR/push.err")
+  if printf '%s' "$GH_ERR" | grep -qi "sign\|verif\|rule\|protect"; then
+    ok  "unsigned commit blocked on agent branch"
+  else
+    ok  "unsigned commit blocked on agent branch (msg: $(head -1 "$WORKDIR/push.err"))"
+  fi
+fi
+
+# ── Test: wrong author email → must be blocked ────────────────────────────────
+# GIT_COMMITTER_* overrides the committer fields while user.email sets author.
+
+if GIT_COMMITTER_EMAIL="$BOT_EMAIL" GIT_COMMITTER_NAME="$BOT_NAME" \
+   try_push_as "$AGENT_BRANCH" "$WRONG_EMAIL" "$BOT_NAME"; then
+  fail "wrong author email to agent branch was NOT blocked  ← security issue"
+  echo "     $(cat "$WORKDIR/push.err")"
+else
+  ok  "wrong author email blocked on agent branch"
+fi
+
+# ── Test: wrong committer email → must be blocked ─────────────────────────────
+
+if GIT_COMMITTER_EMAIL="$WRONG_EMAIL" GIT_COMMITTER_NAME="attacker" \
+   try_push_as "$AGENT_BRANCH" "$BOT_EMAIL" "$BOT_NAME"; then
+  fail "wrong committer email to agent branch was NOT blocked  ← security issue"
+  echo "     $(cat "$WORKDIR/push.err")"
+else
+  ok  "wrong committer email blocked on agent branch"
+fi
+
+# ── Test: API-created commit (bot-signed) → must succeed ──────────────────────
+# git push cannot produce a GitHub-signed commit; use the Contents API instead.
+# This creates a file via the API (GitHub signs the commit), then pushes a ref.
+
+BASE_SHA=$(gh api "/repos/${REPO}/git/ref/heads/${DEFAULT_BRANCH}" --jq '.object.sha')
+BASE_TREE=$(gh api "/repos/${REPO}/git/commits/${BASE_SHA}" --jq '.tree.sha')
+
+API_COMMIT_SHA=$(gh api "/repos/${REPO}/git/commits" \
+  --method POST \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  --field "message=live-test: signed commit (${TS})" \
+  --field "tree=${BASE_TREE}" \
+  --field "parents[]=${BASE_SHA}" \
+  --jq '.sha' 2>"$WORKDIR/api.err") && API_COMMIT_OK=true || API_COMMIT_OK=false
+
+if [[ "$API_COMMIT_OK" != "true" || -z "$API_COMMIT_SHA" ]]; then
+  fail "API commit creation failed: $(cat "$WORKDIR/api.err")"
+else
+  # Push the new commit SHA as a new branch ref.
+  gh api "/repos/${REPO}/git/refs" \
+    --method POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    --field "ref=refs/heads/${AGENT_BRANCH}" \
+    --field "sha=${API_COMMIT_SHA}" \
+    --silent 2>"$WORKDIR/ref.err" \
+  && { ok "API-created (bot-signed) commit pushed to agent branch"; PUSHED_AGENT_BRANCH="$AGENT_BRANCH"; } \
+  || fail "API-created (bot-signed) commit push failed: $(cat "$WORKDIR/ref.err")"
+fi
+
 # ── Cleanup: delete the test branch ───────────────────────────────────────────
 
 if [[ -n "$PUSHED_AGENT_BRANCH" ]]; then
-  if git push --quiet origin --delete "$PUSHED_AGENT_BRANCH"; then
+  if gh api "/repos/${REPO}/git/refs/heads/${PUSHED_AGENT_BRANCH}" \
+       --method DELETE --silent 2>/dev/null; then
     echo ""
     echo "Cleaned up: deleted ${PUSHED_AGENT_BRANCH}"
   else
