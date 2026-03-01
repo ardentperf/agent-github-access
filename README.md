@@ -8,6 +8,8 @@ A dedicated **GitHub App** acts as the agent's identity. Repository rulesets enf
 
 `create-agent-app.sh` generates a self-contained `authenticate-github.sh` with the app credentials embedded. Copy that single file to the agent's sandbox — it handles token generation, git configuration, and gh CLI authentication.
 
+> **Warning:** By default, rulesets will also block any other GitHub Apps installed on the repo (e.g. CI bots, Dependabot) from pushing to non-agent branches. If another app stops being able to push after onboarding, go to **Settings → Rules → Rulesets → agent-blocked-from-non-agent-branches** and add it manually under **Bypass list**.
+
 ```mermaid
 flowchart TD
     subgraph setup["Owner — Trusted Machine"]
@@ -99,8 +101,6 @@ For each onboarded repo, `onboard-repo.sh` creates two GitHub rulesets:
 | `agent-must-use-bot-identity` | branches matching `x-ai/<owner>/**` | Every commit must use the GitHub App bot email; GitHub renders these as `<owner>-agent[bot]` with the app avatar |
 
 Human collaborators (write, maintain, admin roles) bypass both rulesets. The first ruleset excludes the agent prefix so it doesn't apply there; the second targets the agent prefix directly. Together they ensure the agent can only push to its own branches and every commit it makes is visibly attributed.
-
-> **Warning:** `agent-blocked-from-non-agent-branches` will also block any other GitHub Apps installed on the repo (e.g. CI bots, Dependabot) from pushing to non-agent branches. If another app stops being able to push after onboarding, go to **Settings → Rules → Rulesets → agent-blocked-from-non-agent-branches** and add it manually under **Bypass list**.
 
 ## Agent branch naming
 
