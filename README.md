@@ -132,8 +132,6 @@ Delete the old app first (**Settings → Developer settings → GitHub Apps → 
 
 The agent's token expires after ~1 hour. The agent must re-run `authenticate-github.sh` whenever it sees any of:
 
-- `remote: Invalid username or password.`
-- `fatal: Authentication failed for 'https://github.com/'`
 - HTTP 401 or `Bad credentials` from api.github.com
 - `gh: To use GitHub CLI, please run: gh auth login`
 
@@ -150,11 +148,13 @@ When the agent runs `~/authenticate-github.sh` it prints exactly what to store. 
 ```
 BRANCH PREFIX: x-ai/<your-github-username>/
   e.g. x-ai/<your-github-username>/fix-deploy-workflow
-  GitHub rejects pushes to any other prefix. Never push to main.
+  GitHub enforces this server-side. Never push to main or any other prefix.
+
+COMMIT METHOD: gh api repos/{owner}/{repo}/git/... (GitHub Git Data API)
+  Do NOT use git commit + git push. Agent branches require signed commits;
+  only API-created commits are signed automatically.
 
 RE-RUN ~/authenticate-github.sh before retrying if you see:
-  remote: Invalid username or password.
-  fatal: Authentication failed for 'https://github.com/'
   HTTP 401 or "Bad credentials" from api.github.com
   gh: To use GitHub CLI, please run: gh auth login
 ```
