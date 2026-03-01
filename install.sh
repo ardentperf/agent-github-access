@@ -3,12 +3,17 @@ set -euo pipefail
 
 
 # ── Dependencies ────────────────────────────────────────────────────────────
-for cmd in gh jq python3; do
+for cmd in gh jq python3 openssl; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "Error: '$cmd' is required but not found." >&2
     exit 1
   fi
 done
+if ! python3 -c "import nacl.encoding, nacl.public" 2>/dev/null; then
+  echo "Error: Python package 'PyNaCl' is required but not installed." >&2
+  echo "  pip install PyNaCl" >&2
+  exit 1
+fi
 
 # ── Account selection ─────────────────────────────────────────────────────────
 if [[ $# -gt 0 ]]; then
@@ -34,6 +39,14 @@ echo "Authenticated as: ${USERNAME}"
 echo "App name:         ${APP_NAME}"
 echo ""
 
+# ── Check for existing app credentials ───────────────────────────────────────
+FORK_REPO="${USERNAME}/agent-github-access"
+if gh api "/repos/${FORK_REPO}/actions/secrets/GH_APP_ID" --silent 2>/dev/null; then
+  echo "Error: a GitHub App has already been created for this account." >&2
+  echo "  See the 'Uninstalling / full cleanup' section in README.md for instructions." >&2
+  exit 1
+fi
+
 # ── App permissions ───────────────────────────────────────────────────────────
 # These are the permissions the GitHub App will request from each repo it is
 # installed on. To change them: edit below, re-run this script, then each repo
@@ -42,6 +55,14 @@ echo ""
 # Not currently enabled — uncomment in the jq block below to activate:
 #   pull_requests: "write"   open, update, and merge pull requests
 #   issues:        "write"   create and update issue comments
+
+# ── Onboard the fork before the app is created ───────────────────────────────
+# Sets up branch protection rulesets on the fork so they are in place the
+# moment the app is installed. Safe to re-run — onboard-repo.sh is idempotent.
+echo "Setting up branch protection on ${USERNAME}/agent-github-access…"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+bash "${SCRIPT_DIR}/onboard-repo.sh" "${USERNAME}/agent-github-access"
+echo ""
 
 # ── Find a free port ─────────────────────────────────────────────────────────
 # Ask the OS for a free port, release it, then bind the server to it.
@@ -197,7 +218,14 @@ if [[ -z "$CODE" ]]; then
 fi
 
 echo "Exchanging code for credentials…"
-RESULT=$(gh api --method POST "/app-manifests/${CODE}/conversions")
+# Note: this endpoint is intentionally unauthenticated — the short-lived code
+# is the only credential needed. Fine-grained PATs are explicitly rejected here,
+# so we use curl with no Authorization header.
+RESULT=$(curl -sf \
+  -X POST \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/app-manifests/${CODE}/conversions")
 
 APP_ID=$(  echo "$RESULT" | jq -r '.id')
 APP_SLUG=$(echo "$RESULT" | jq -r '.slug')
@@ -372,265 +400,41 @@ PYEOF
 
 chmod 700 "$OUTFILE"
 
-# ── Generate onboard-repo.sh ──────────────────────────────────────────────────
-ONBOARD_SCRIPT="onboard-repo.sh"
+# ── Store app credentials as secrets in the fork ──────────────────────────────
+# GH_APP_ID and GH_APP_PEM are stored in the fork's Actions secrets so the
+# audit workflow can use them. Secrets require libsodium box encryption.
+echo "Storing app credentials in ${FORK_REPO} secrets…"
 
-python3 - "$APP_ID" "$PEM_B64" "$USERNAME" "$ONBOARD_SCRIPT" << 'PYEOF'
-import sys
-app_id, pem_b64, owner_login, outfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+python3 - "$APP_ID" "$PEM_B64" "$FORK_REPO" << 'PYEOF'
+import sys, json, subprocess, base64
+from nacl.encoding import Base64Encoder
+from nacl.public import PublicKey, SealedBox
 
-header = (
-    '#!/usr/bin/env bash\n'
-    '# Expands the agent\'s reach to a repository: sets up branch rules and grants\n'
-    '# the agent app access. For repos outside the agent owner\'s account the repo\n'
-    '# is forked first. Run this from your trusted machine for each repo.\n'
-    '#\n'
-    '# Usage: ./onboard-repo.sh <repo> or ./onboard-repo.sh <owner/repo>\n'
-    'set -euo pipefail\n'
-    '\n'
-    '# ── Embedded values ───────────────────────────────────────────────────────────\n'
-    f'APP_ID="{app_id}"\n'
-    f'APP_PEM_B64="{pem_b64}"\n'
-    f'OWNER_LOGIN="{owner_login}"\n'
-)
+app_id, pem_b64, fork_repo = sys.argv[1], sys.argv[2], sys.argv[3]
 
-body = r"""AGENT_BRANCH_PREFIX="x-ai/${OWNER_LOGIN}"
+def get_public_key():
+    r = subprocess.run(
+        ["gh", "api", f"/repos/{fork_repo}/actions/secrets/public-key"],
+        capture_output=True, text=True, check=True)
+    d = json.loads(r.stdout)
+    return d["key_id"], d["key"]
 
-if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 <repo> or $0 <owner/repo>" >&2
-  exit 1
-fi
+def put_secret(name, value, key_id, pub_key_b64):
+    pub_key = PublicKey(pub_key_b64, encoder=Base64Encoder)
+    encrypted = SealedBox(pub_key).encrypt(value.encode(), encoder=Base64Encoder).decode()
+    subprocess.run(
+        ["gh", "api", "--method", "PUT",
+         f"/repos/{fork_repo}/actions/secrets/{name}",
+         "--input", "-"],
+        input=json.dumps({"encrypted_value": encrypted, "key_id": key_id}),
+        text=True, check=True)
 
-# Accept plain repo name (no slash) and assume current owner
-if [[ "$1" == */* ]]; then
-  INPUT_REPO="$1"
-else
-  INPUT_REPO="${OWNER_LOGIN}/$1"
-fi
-INPUT_OWNER="${INPUT_REPO%%/*}"
-REPO_NAME="${INPUT_REPO##*/}"
-
-# ── Verify the source repo is accessible ─────────────────────────────────────
-if ! gh api "/repos/${INPUT_REPO}" --silent; then
-  echo "Error: cannot access '${INPUT_REPO}'. Check the repo name and your gh credentials." >&2
-  exit 1
-fi
-
-# ── Fork if the repo is outside the agent owner's account ────────────────────
-if [[ "$INPUT_OWNER" == "$OWNER_LOGIN" ]]; then
-  TARGET_REPO="$INPUT_REPO"
-else
-  echo "Repository is outside the agent owner's account (${OWNER_LOGIN})."
-  FORK_REPO="${OWNER_LOGIN}/${REPO_NAME}"
-
-  if gh api "/repos/${FORK_REPO}" --silent; then
-    FORK_PARENT=$(gh api "/repos/${FORK_REPO}" --jq '.parent.full_name // empty')
-    if [[ "$FORK_PARENT" == "$INPUT_REPO" ]]; then
-      echo "Error: a fork already exists at ${FORK_REPO}." >&2
-      echo "  To onboard it, pass the fork directly: ./onboard-repo.sh ${FORK_REPO}" >&2
-      exit 1
-    else
-      echo "Error: ${FORK_REPO} already exists but is not a fork of ${INPUT_REPO}." >&2
-      exit 1
-    fi
-  else
-    echo "  Forking ${INPUT_REPO} into ${OWNER_LOGIN}..."
-    gh api \
-      --method POST \
-      -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      "/repos/${INPUT_REPO}/forks" \
-      --silent
-    echo "  Waiting for fork to be ready..."
-    for i in $(seq 1 12); do
-      sleep 5
-      if gh api "/repos/${FORK_REPO}" --silent; then break; fi
-      if [[ "$i" -eq 12 ]]; then
-        echo "Error: fork did not become available after 60 seconds." >&2; exit 1
-      fi
-    done
-    echo "  Forked to: ${FORK_REPO}"
-  fi
-  TARGET_REPO="$FORK_REPO"
-fi
-
-# ── Resolve installation ID via app JWT ──────────────────────────────────────
-APP_PEM=$(printf '%s' "$APP_PEM_B64" | base64 -d)
-
-b64url() { base64 | tr '+/' '-_' | tr -d '=\n'; }
-NOW=$(date +%s); EXP=$((NOW + 540))
-HEADER=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
-PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":%d}' "$NOW" "$EXP" "$APP_ID" | b64url)
-TMPKEY=$(mktemp); chmod 600 "$TMPKEY"; printf '%s' "$APP_PEM" > "$TMPKEY"
-SIG=$(printf '%s.%s' "$HEADER" "$PAYLOAD" | openssl dgst -binary -sha256 -sign "$TMPKEY" | b64url)
-rm -f "$TMPKEY"
-JWT="${HEADER}.${PAYLOAD}.${SIG}"
-
-INSTALL_ID=$(curl -sf \
-  -H "Authorization: Bearer ${JWT}" \
-  -H "Accept: application/vnd.github+json" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  "https://api.github.com/app/installations" \
-  | jq -r '.[0].id // empty')
-
-if [[ -z "$INSTALL_ID" ]]; then
-  echo "Error: no installation found for this app. Install the app on GitHub first." >&2
-  exit 1
-fi
-
-# Get an installation access token (needed to list repos via the app identity)
-INSTALL_TOKEN=$(curl -sf \
-  -X POST \
-  -H "Authorization: Bearer ${JWT}" \
-  -H "Accept: application/vnd.github+json" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" \
-  | jq -r '.token // empty')
-
-# ── Audit: remove installed repos missing expected branch rules ───────────────
-# Any repo granted to this installation without both agent rulesets is
-# unprotected — the app could push to any branch. Remove such repos now.
-INSTALLED=$(curl -sf \
-  -H "Authorization: token ${INSTALL_TOKEN}" \
-  -H "Accept: application/vnd.github+json" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  "https://api.github.com/installation/repositories" \
-  | jq -r '.repositories[] | "\(.id) \(.full_name)"' || true)
-
-if [[ -n "$INSTALLED" ]]; then
-  while IFS=' ' read -r rid rname; do
-    [[ -z "$rname" || ! "$rname" == */* ]] && continue
-    [[ "$rname" == "$TARGET_REPO" ]] && continue
-    HAS_RULESET=$(gh api "/repos/${rname}/rulesets" \
-      --jq '[.[] | select(.name == "agent-gh-access-apps-blocked-from-non-ai-branches")] | length' || echo 0)
-    if [[ "$HAS_RULESET" == "0" ]]; then
-      echo "Warning: ${rname} is missing branch protection rules — removing from installation." >&2
-      gh api \
-        --method DELETE \
-        -H "Accept: application/vnd.github+json" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        "/user/installations/${INSTALL_ID}/repositories/${rid}" \
-        --silent || true
-    fi
-  done <<< "$INSTALLED"
-fi
-
-echo "Onboarding ${TARGET_REPO} for agent access..."
-echo "  Agent branch prefix: ${AGENT_BRANCH_PREFIX}/**"
-echo ""
-
-# ── Remove any existing same-named rulesets (handles app re-creation) ─────────
-for _ruleset_name in "agent-gh-access-apps-blocked-from-non-ai-branches" "agent-gh-access-apps-must-sign"; do
-  _old_id=$(gh api "/repos/${TARGET_REPO}/rulesets" \
-    --jq ".[] | select(.name == \"${_ruleset_name}\") | .id" \
-    | head -1 || true)
-  if [[ -n "$_old_id" ]]; then
-    echo "  Replacing existing ruleset (${_ruleset_name})..."
-    gh api \
-      --method DELETE \
-      -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      "/repos/${TARGET_REPO}/rulesets/${_old_id}" \
-      --silent
-  fi
-done
-
-# ── Build bypass_actors list ──────────────────────────────────────────────────
-# Bypasses human roles (write, maintain, admin).
-# RepositoryRole: 2 = maintain, 4 = write, 5 = admin  (not hierarchical)
-BYPASS_ACTORS='[
-  {"actor_id":2,"actor_type":"RepositoryRole","bypass_mode":"always"},
-  {"actor_id":4,"actor_type":"RepositoryRole","bypass_mode":"always"},
-  {"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}
-]'
-
-gh api \
-  --method POST \
-  -H "Accept: application/vnd.github+json" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  "/repos/${TARGET_REPO}/rulesets" \
-  --silent \
-  --input - << EOF
-{
-  "name": "agent-gh-access-apps-blocked-from-non-ai-branches",
-  "target": "branch",
-  "enforcement": "active",
-  "bypass_actors": ${BYPASS_ACTORS},
-  "conditions": {
-    "ref_name": {
-      "include": ["~ALL"],
-      "exclude": ["refs/heads/${AGENT_BRANCH_PREFIX}/**"]
-    }
-  },
-  "rules": [
-    { "type": "creation" },
-    { "type": "update"   },
-    { "type": "deletion" }
-  ]
-}
-EOF
-
-echo "  ✓ Ruleset: agent blocked from all branches except ${AGENT_BRANCH_PREFIX}/**"
-
-# ── Ruleset: require signed commits on agent branches ────────────────────────
-# All commits to x-ai/<owner>/** must be signed and verified. The GitHub App
-# signs commits server-side, so agent commits pass automatically. The bot's git
-# identity (name + email) is configured by authenticate-github.sh so commits
-# are attributed correctly in the GitHub UI. Human contributors bypass.
-gh api \
-  --method POST \
-  -H "Accept: application/vnd.github+json" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  "/repos/${TARGET_REPO}/rulesets" \
-  --silent \
-  --input - << EOF
-{
-  "name": "agent-gh-access-apps-must-sign",
-  "target": "branch",
-  "enforcement": "active",
-  "bypass_actors": ${BYPASS_ACTORS},
-  "conditions": {
-    "ref_name": {
-      "include": ["refs/heads/${AGENT_BRANCH_PREFIX}/**"],
-      "exclude": []
-    }
-  },
-  "rules": [
-    { "type": "required_signatures" }
-  ]
-}
-EOF
-
-echo "  ✓ Ruleset: agent commits must be signed on ${AGENT_BRANCH_PREFIX}/**"
-
-# ── Add repo to the app installation ─────────────────────────────────────────
-# Branch protection is now in place. Only after that do we grant the app access
-# to this repo by adding it to the installation. This ensures the app is never
-# active on a repo that lacks the branch protection rules.
-REPO_ID=$(gh api "/repos/${TARGET_REPO}" --jq '.id')
-
-gh api \
-  --method PUT \
-  -H "Accept: application/vnd.github+json" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  "/user/installations/${INSTALL_ID}/repositories/${REPO_ID}" \
-  --silent 2>/dev/null || true  # 403 expected — standard gh token lacks write:org scope;
-                                # repo is added via the GitHub App install UI instead
-
-echo "  ✓ Repo added to app installation"
-echo ""
-echo "Done. The agent can now work in ${TARGET_REPO}."
-if [[ "$TARGET_REPO" != "$INPUT_REPO" ]]; then
-  echo "  (fork of ${INPUT_REPO})"
-fi
-echo "  Agent branches must match: ${AGENT_BRANCH_PREFIX}/**"
-"""
-
-with open(outfile, 'w') as f:
-    f.write(header + body)
+key_id, pub_key = get_public_key()
+put_secret("GH_APP_ID",  app_id,  key_id, pub_key)
+put_secret("GH_APP_PEM", pem_b64, key_id, pub_key)
+print("  ✓ GH_APP_ID and GH_APP_PEM stored in fork secrets")
 PYEOF
 
-chmod 755 "$ONBOARD_SCRIPT"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
@@ -640,16 +444,14 @@ echo "  ID:   ${APP_ID}"
 echo "  Slug: ${APP_SLUG}"
 echo ""
 echo "Generated scripts:"
-echo "  ${OUTFILE}     — copy to the agent's \$HOME"
-echo "  ${ONBOARD_SCRIPT} — run on this machine per repo to grant agent access"
+echo "  ${OUTFILE}  — copy to the agent's \$HOME"
 echo ""
 echo "Next steps:"
 echo "  1. A browser will open to install the app. Choose 'Only select repositories',"
-echo "     select one repo, and click Install."
-echo "  2. Immediately run: ./onboard-repo.sh <repo>"
-echo "     This sets up branch protection rules on that repo."
-echo "  3. Repeat step 2 for each additional repo."
-echo "  4. Copy ${OUTFILE} to the agent: scp ${OUTFILE} user@agent-host:~/"
+echo "     select your fork (${USERNAME}/agent-github-access) and click Install."
+echo "  2. For each additional repo the agent should work in:"
+echo "     ./onboard-repo.sh <repo>"
+echo "  3. Copy ${OUTFILE} to the agent: scp ${OUTFILE} user@agent-host:~/"
 echo ""
 echo "The browser tab will redirect to the installation page automatically."
 echo "If it does not, install manually at:"

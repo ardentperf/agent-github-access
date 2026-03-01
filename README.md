@@ -1,6 +1,9 @@
 [![Unit Tests](https://github.com/ardentperf/agent-github-access/actions/workflows/test.yml/badge.svg)](https://github.com/ardentperf/agent-github-access/actions/workflows/test.yml)
+[![App Access Audit](https://github.com/ardentperf/agent-github-access/actions/workflows/audit.yml/badge.svg)](https://github.com/ardentperf/agent-github-access/actions/workflows/audit.yml)
 
 # Agent GitHub Access
+
+> **Personal GitHub accounts only.** This project is designed for individual users on free GitHub accounts. It is not intended for GitHub Organizations or Enterprise accounts and has not been tested with them.
 
 Give an AI agent a distinct GitHub identity with server-side guardrails: the agent can only push to branches it owns, can never touch your personal or main branches, and its activity is unambiguously attributed in every GitHub view.
 
@@ -8,26 +11,48 @@ Give an AI agent a distinct GitHub identity with server-side guardrails: the age
 
 A dedicated **GitHub App** acts as the agent's identity. Repository rulesets enforce that the app can only create or modify branches matching `x-ai/<owner>/**`. Every commit the agent makes appears as `<username>-agent[bot]` in the GitHub UI. The `x-ai/` prefix sorts to the end of the branch list, keeping agent branches visually separate from human work.
 
-`create-agent-app.sh` generates a self-contained `authenticate-github.sh` with the app credentials embedded. Copy that single file to the agent's sandbox — it handles token generation, git configuration, and gh CLI authentication.
+You start by forking this repo into your personal account. Your `agent-github-access` fork becomes the home for this tool's state — specifically, the GitHub App credentials (app ID and private key) are stored as secrets in your `agent-github-access` fork. The setup scripts read and write these secrets so that `install.sh` and `onboard-repo.sh` are idempotent: re-running them is always safe and picks up where it left off.
+
+`install.sh` generates a self-contained `authenticate-github.sh` with the app credentials embedded. Copy that single file to the agent's sandbox — it handles token generation, git configuration, and gh CLI authentication.
 
 > **Warning:** By default, rulesets will also block any other GitHub Apps installed on the repo (e.g. CI bots, Dependabot) from pushing to non-agent branches. If another app stops being able to push after onboarding, go to **Settings → Rules → Rulesets → agent-gh-access-apps-blocked-from-non-ai-branches** and add it manually under **Bypass list**.
 
 ```mermaid
 flowchart TD
-    subgraph setup["Owner — Trusted Machine"]
-        A(["run create-agent-app.sh"]) --> B(["Browser: confirm app creation"])
-        B --> C(["Browser: install app
+    subgraph admin["Your GitHub Account (browser, admin access)"]
+        F(["Fork this repo
+do not rename it"]) --> P
+        P(["Create fine-grained PAT
+GitHub UI or prereq-setup-creds.sh"])
+    end
 
+    subgraph fork["agent-github-access fork — GitHub (your account)"]
+        SEC["🔒 Secrets: GH_APP_ID, GH_APP_PEM"]
+        INV["📄 onboarded-repos.txt"]
+        AU(["Audit workflow
+scheduled daily + on each onboard"])
+        AU --> AUC{"All installed repos
+have both rulesets?"}
+        AUC -->|"yes"| AUP["✓ Badge green"]
+        AUC -->|"no"| AUF["✗ Badge red
+run onboard-repo.sh"]
+        AUC -->|"yes"| INV
+    end
+
+    subgraph setup["Any Machine (PAT only, no admin creds)"]
+        A(["gh auth login with PAT"]) --> B(["run install.sh"])
+        B --> BF["*agent-github-access branch rules set*"]
+        BF --> C(["Browser: confirm app creation"])
+        C --> D(["Browser: install app
 select one repo"])
-        C --> D["*authenticate-github.sh &
-onboard-repo.sh generated*"]
-        D --> E(["run onboard-repo.sh for each repo"])
-        E --> H["*Branch rules set
+        D --> E["*authenticate-github.sh generated*"]
+        E --> R(["run onboard-repo.sh for each repo"])
+        R --> H["*Branch rules set
 App granted repo access*"]
     end
 
     subgraph agent["Agent — Sandbox"]
-        G(["Optional: manually update global agent config"])
+        G(["Optional: pre-populate global agent config"])
         G --> I(["Tell agent: run $HOME/authenticate-github.sh"])
         I --> J["*git + gh CLI configured
 token valid ~1 hour*"]
@@ -35,39 +60,74 @@ token valid ~1 hour*"]
 branch: x-ai/&lt;owner&gt;/…*"]
     end
 
-    D -.->|"scp authenticate-github.sh agent-host:~/authenticate-github.sh"| I
-    D -.->|"pre-populate"| G
+    P -.->|"copy PAT to setup machine"| A
+    E -->|"stores app credentials"| SEC
+    SEC -.->|"read on re-run"| B
+    E -.->|"scp authenticate-github.sh agent-host:~/"| I
+    E -.->|"pre-populate"| G
+    R -.->|"triggers"| AU
 ```
 
 ## Prerequisites
 
-- [`gh` CLI](https://cli.github.com/) installed and authenticated
-- `jq`, `python3`, `openssl` available on `$PATH`
+- A **personal** GitHub account (free tier is fine; not for orgs or enterprise)
+- [`gh` CLI](https://cli.github.com/), `jq`, `python3`, `openssl` on the machine where you run the setup scripts
 
-## Setup (trusted machine, once)
+## Setup
 
-**1. Create the GitHub App and generate scripts**
+The setup process has two distinct privilege levels. Steps 0–1 require your GitHub credentials (admin access). Steps 2–5 require only the fine-grained PAT you create in step 1 — no classic token or OAuth session needed.
+
+**0. Fork this repo** *(GitHub UI, admin access)*
+
+Fork `ardentperf/agent-github-access` into your personal GitHub account. Do not rename your fork of this repo — the repo name must stay `agent-github-access`.
+
+**1. Create a fine-grained PAT** *(GitHub UI, admin access)*
+
+In the GitHub UI, create a fine-grained PAT with these settings:
+- **Repository access**: your `agent-github-access` fork (`<username>/agent-github-access`) only
+- **Permissions**: Administration (read/write), Secrets (read/write)
+- **Expiration**: 90 days recommended
+
+`prereq-setup-creds.sh` is provided as a reference and convenience — read it to understand exactly what is being requested, then run it on any machine where you are logged in to GitHub in a browser to get a pre-filled URL:
 
 ```bash
-./create-agent-app.sh
-# If you have multiple gh accounts authenticated:
-./create-agent-app.sh <username>
+./prereq-setup-creds.sh <github-username>
 ```
+
+**2. Authenticate gh with the PAT** *(any machine, PAT only)*
+
+On the machine where you will run the setup scripts:
+
+```bash
+echo '<your-pat>' | gh auth login --hostname github.com --with-token
+```
+
+**3. Create the GitHub App and generate scripts** *(any machine, PAT only)*
+
+```bash
+./install.sh
+# If you have multiple gh accounts authenticated:
+./install.sh <username>
+```
+
+If `GH_APP_ID` is already set as a secret in your `agent-github-access` fork, the script will detect this and exit early — the app already exists. See [Uninstalling / full cleanup](#uninstalling--full-cleanup) if you need to start over.
 
 Two scripts are generated:
 - `authenticate-github.sh` — give this to the agent
-- `onboard-repo.sh` — run this per repo on your trusted machine
+- `onboard-repo.sh` — run this per repo on the same machine
 
-**2. Install the app**
+The app ID and private key are stored as secrets in your `agent-github-access` fork (`GH_APP_ID` and `GH_APP_PEM`) so you don't need to keep the generated scripts around to re-run setup.
+
+**4. Install the app** *(browser)*
 
 A browser tab opens automatically. On the GitHub page:
 - Choose **Only select repositories**
 - Select **one repo** you intend the agent to use (GitHub requires at least one)
 - Click **Install**
 
-Then immediately run step 3 for that repo. `onboard-repo.sh` sets up branch rules and closes the brief window where the app has unguarded access. On every subsequent run it also audits the installation and removes any repos that are missing the expected rules.
+The `agent-github-access` fork already has its branch protection rules in place (applied in step 3), so there is no window of unguarded access.
 
-**3. Grant the agent access to a repository**
+**5. Grant the agent access to a repository** *(any machine, PAT only)*
 
 ```bash
 ./onboard-repo.sh repo
@@ -75,13 +135,13 @@ Then immediately run step 3 for that repo. `onboard-repo.sh` sets up branch rule
 ./onboard-repo.sh owner/repo
 ```
 
-For your own repos, pass just the repo name. For repos outside your account, the script forks it automatically then configures the fork. If you already have a fork, pass the fork directly instead.
+For your own repos, pass just the repo name. For repos outside your account, the script forks the target repo into your account automatically then configures it. If you already have such a fork, pass it directly instead.
 
 Re-running `onboard-repo.sh` for a repo is safe — it replaces any existing ruleset with the current configuration. This is the correct way to re-onboard after recreating the app.
 
 Repeat for each repo the agent should work in.
 
-**4. Give the agent its credentials**
+**6. Give the agent its credentials**
 
 Copy `authenticate-github.sh` to the agent's home directory:
 
@@ -126,16 +186,23 @@ To immediately cut off all agents using this app, delete the app's private key:
 
 New token requests are blocked immediately — the agent can no longer refresh its credentials. Any token already in hand remains valid until it expires (~1 hour). To revoke active tokens instantly, uninstall or delete the app entirely.
 
-## Recreating the app
+## Uninstalling / full cleanup
 
-Delete the old app first (**Settings → Developer settings → GitHub Apps → your app → Edit → Advanced → Delete GitHub App**), then re-run `create-agent-app.sh`. After that, re-run `onboard-repo.sh` for each repo — it replaces the stale rulesets from the previous app with fresh ones tied to the new app's identity.
+1. **Delete the GitHub App** — Settings → Developer settings → GitHub Apps → your app → Edit → Advanced → Delete GitHub App. This immediately revokes all tokens and removes the app from every installed repo.
+2. **Run `cleanup.sh`** — deletes the fork secrets and removes the two `agent-gh-access-*` rulesets from every repo in the inventory:
+
+```bash
+./cleanup.sh
+```
+
+The script reads the app ID from `onboarded-repos.txt` (committed to the fork by the audit workflow) and will prompt you to delete the app if it detects it still exists before proceeding.
+
+To reinstall from scratch after a full cleanup, re-run `install.sh` and `onboard-repo.sh` as in the original setup.
 
 ## Credential refresh
 
 The agent's token expires after ~1 hour. The agent must re-run `authenticate-github.sh` whenever it sees any of:
 
-- `remote: Invalid username or password.`
-- `fatal: Authentication failed for 'https://github.com/'`
 - HTTP 401 or `Bad credentials` from api.github.com
 - `gh: To use GitHub CLI, please run: gh auth login`
 
@@ -147,16 +214,18 @@ The branch naming rule and credential refresh procedure apply across **all** rep
 
 ### Suggested global AGENTS.md content
 
-When the agent runs `~/authenticate-github.sh` it prints exactly what to store. You can also pre-populate the global file manually so the rules are in place from the first session. Either way, the content looks like this — **replace `<your-github-username>` with your actual GitHub username before saving**:
+When the agent runs `~/authenticate-github.sh` it prints exactly what to store, with your GitHub username filled in. You can also pre-populate the global file manually so the rules are in place from the first session. Either way, the content looks like this — **replace `<your-github-username>` with your actual GitHub username before saving**:
 
 ```
 BRANCH PREFIX: x-ai/<your-github-username>/
   e.g. x-ai/<your-github-username>/fix-deploy-workflow
-  GitHub rejects pushes to any other prefix. Never push to main.
+  GitHub enforces this server-side. Never push to main or any other prefix.
+
+COMMIT METHOD: gh api repos/<your-github-username>/{repo}/git/... (GitHub Git Data API)
+  Do NOT use git commit + git push. Agent branches require signed commits;
+  only API-created commits are signed automatically.
 
 RE-RUN ~/authenticate-github.sh before retrying if you see:
-  remote: Invalid username or password.
-  fatal: Authentication failed for 'https://github.com/'
   HTTP 401 or "Bad credentials" from api.github.com
   gh: To use GitHub CLI, please run: gh auth login
 ```
