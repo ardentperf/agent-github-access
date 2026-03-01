@@ -143,14 +143,14 @@ The branch naming rule and credential refresh procedure apply across **all** rep
 
 ### Suggested global AGENTS.md content
 
-When the agent runs `~/authenticate-github.sh` it prints exactly what to store, with your GitHub username filled in. You can also pre-populate the global file manually so the rules are in place from the first session. Either way, the content looks like this (with `ardentperf` as an example username):
+When the agent runs `~/authenticate-github.sh` it prints exactly what to store, with your GitHub username filled in. You can also pre-populate the global file manually so the rules are in place from the first session. Either way, the content looks like this — **replace `<your-github-username>` with your actual GitHub username before saving**:
 
 ```
-BRANCH PREFIX: x-ai/ardentperf/
-  e.g. x-ai/ardentperf/fix-deploy-workflow
+BRANCH PREFIX: x-ai/<your-github-username>/
+  e.g. x-ai/<your-github-username>/fix-deploy-workflow
   GitHub enforces this server-side. Never push to main or any other prefix.
 
-COMMIT METHOD: gh api repos/ardentperf/{repo}/git/... (GitHub Git Data API)
+COMMIT METHOD: gh api repos/<your-github-username>/{repo}/git/... (GitHub Git Data API)
   Do NOT use git commit + git push. Agent branches require signed commits;
   only API-created commits are signed automatically.
 
