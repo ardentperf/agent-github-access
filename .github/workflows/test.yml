@@ -1,10 +1,15 @@
 name: Unit Tests
 
 on:
+  push:
   workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "ok"
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get install -y jq
+      - name: Run unit tests
+        run: bash unit-test.sh
