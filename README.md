@@ -100,7 +100,7 @@ For each onboarded repo, `onboard-repo.sh` creates two GitHub rulesets:
 
 Human collaborators (write, maintain, admin roles) bypass both rulesets. The first ruleset excludes the agent prefix so it doesn't apply there; the second targets the agent prefix directly. Together they ensure the agent can only push to its own branches and every commit it makes is visibly attributed.
 
-> **Warning:** By default, `agent-blocked-from-non-agent-branches` will also block any other GitHub Apps installed on the repo (e.g. CI bots, Dependabot) from pushing to non-agent branches. `onboard-repo.sh` attempts to detect and add them as bypass actors automatically, but this requires installation-scoped permissions that a standard personal token does not have. If another app stops being able to push after onboarding, go to **Settings → Rules → Rulesets → agent-blocked-from-non-agent-branches** and add it manually under **Bypass list**.
+> **Warning:** `agent-blocked-from-non-agent-branches` will also block any other GitHub Apps installed on the repo (e.g. CI bots, Dependabot) from pushing to non-agent branches. If another app stops being able to push after onboarding, go to **Settings → Rules → Rulesets → agent-blocked-from-non-agent-branches** and add it manually under **Bypass list**.
 
 ## Agent branch naming
 

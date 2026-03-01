@@ -535,42 +535,13 @@ for _ruleset_name in "agent-blocked-from-non-agent-branches" "agent-must-use-bot
 done
 
 # ── Build bypass_actors list ──────────────────────────────────────────────────
-# Always includes human roles (write, maintain, admin).
-# Attempts to also include other installed GitHub Apps, but the /user/installations
-# endpoint returns 403 with a standard personal token (requires installation scope),
-# so in practice only the human roles are added.
-BYPASS_ACTORS=$(
-  # Seed with human roles
-  roles='[
-    {"actor_id":2,"actor_type":"RepositoryRole","bypass_mode":"always"},
-    {"actor_id":4,"actor_type":"RepositoryRole","bypass_mode":"always"},
-    {"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}
-  ]'
-
-  # Collect other app installations that have access to this repo
-  app_entries='[]'
-  while IFS=$'\t' read -r inst_id app_id repo_sel; do
-    [[ "$app_id" == "$APP_ID" ]] && continue
-    include=0
-    if [[ "$repo_sel" == "all" ]]; then
-      include=1
-    else
-      has=$(gh api "/user/installations/${inst_id}/repositories" \
-        --jq ".repositories[] | select(.full_name == \"${TARGET_REPO}\") | .id" \
-        || true)
-      [[ -n "$has" ]] && include=1
-    fi
-    if [[ "$include" == "1" ]]; then
-      entry=$(jq -n --argjson id "$app_id" \
-        '{"actor_id":$id,"actor_type":"Integration","bypass_mode":"always"}')
-      app_entries=$(jq -n --argjson a "$app_entries" --argjson e "$entry" '$a + [$e]')
-    fi
-  done < <(gh api "/user/installations?per_page=100" \
-    --jq '.installations[] | [.id, .app_id, .repository_selection] | @tsv' \
-    2>/dev/null || true)  # 403 expected — user token lacks installation scope
-
-  jq -n --argjson r "$roles" --argjson a "$app_entries" '$r + $a'
-)
+# Bypasses human roles (write, maintain, admin).
+# RepositoryRole: 2 = maintain, 4 = write, 5 = admin  (not hierarchical)
+BYPASS_ACTORS='[
+  {"actor_id":2,"actor_type":"RepositoryRole","bypass_mode":"always"},
+  {"actor_id":4,"actor_type":"RepositoryRole","bypass_mode":"always"},
+  {"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}
+]'
 
 gh api \
   --method POST \

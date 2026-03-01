@@ -350,19 +350,6 @@ if [[ "\$args" == *"--method POST"* && "\$args" == *"rulesets"* ]]; then
   exit 0
 fi
 
-# List user installations — for bypass_actors building
-# Returns one "other" app (id!=TEST_APP_ID) with all-repos access
-if [[ "\$args" == *"/user/installations"* && "\$args" == *"per_page"* ]]; then
-  printf '{"installations":[{"id":77,"app_id":12345,"repository_selection":"all"}]}'
-  exit 0
-fi
-
-# Check repos for a specific installation (selected-repos case)
-if [[ "\$args" == *"/user/installations"* && "\$args" == *"/repositories"* ]]; then
-  printf '{"repositories":[]}'
-  exit 0
-fi
-
 if [[ "\$args" == *"--method PUT"* || ("\$args" == *"--method POST"* && "\$args" == *"/forks"*) ]]; then
   exit 0
 fi
