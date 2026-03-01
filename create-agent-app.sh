@@ -339,7 +339,8 @@ fi
 
 # ── Configure git identity as the app bot ────────────────────────────────────
 # Commits authored with this identity are displayed as ${OWNER_LOGIN}-agent[bot]
-# in the GitHub UI and satisfy the agent-must-use-bot-identity branch ruleset.
+# in the GitHub UI. The agent-must-use-bot-identity ruleset requires signed
+# commits on agent branches; the GitHub App signs commits server-side.
 git config --global user.name "${OWNER_LOGIN}-agent[bot]"
 git config --global user.email "${APP_ID}+${OWNER_LOGIN}-agent[bot]@users.noreply.github.com"
 
@@ -571,10 +572,11 @@ EOF
 
 echo "  ✓ Ruleset: agent blocked from all branches except ${AGENT_BRANCH_PREFIX}/**"
 
-# ── Ruleset: enforce bot identity on commits to agent branches ────────────────
-# Commits to x-ai/<owner>/** must use the GitHub App bot email address.
-# This makes every agent commit appear as <owner>-agent[bot] in the GitHub UI.
-# Human contributors (write, maintain, admin roles) bypass.
+# ── Ruleset: require signed commits on agent branches ────────────────────────
+# All commits to x-ai/<owner>/** must be signed and verified. The GitHub App
+# signs commits server-side, so agent commits pass automatically. The bot's git
+# identity (name + email) is configured by authenticate-github.sh so commits
+# are attributed correctly in the GitHub UI. Human contributors bypass.
 gh api \
   --method POST \
   -H "Accept: application/vnd.github+json" \
@@ -594,20 +596,12 @@ gh api \
     }
   },
   "rules": [
-    {
-      "type": "commit_author_email_pattern",
-      "parameters": {
-        "operator": "ends_with",
-        "pattern": "+${OWNER_LOGIN}-agent[bot]@users.noreply.github.com",
-        "negate": false,
-        "name": "commits must use bot identity"
-      }
-    }
+    { "type": "required_signatures" }
   ]
 }
 EOF
 
-echo "  ✓ Ruleset: agent commits must use bot identity on ${AGENT_BRANCH_PREFIX}/**"
+echo "  ✓ Ruleset: agent commits must be signed on ${AGENT_BRANCH_PREFIX}/**"
 
 # ── Add repo to the app installation ─────────────────────────────────────────
 # Branch protection is now in place. Only after that do we grant the app access

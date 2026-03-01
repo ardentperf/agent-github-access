@@ -98,9 +98,11 @@ For each onboarded repo, `onboard-repo.sh` creates two GitHub rulesets:
 | Ruleset | Covers | Effect |
 |---|---|---|
 | `agent-blocked-from-non-agent-branches` | all branches **except** `x-ai/<owner>/**` | Agent app cannot push outside its prefix |
-| `agent-must-use-bot-identity` | branches matching `x-ai/<owner>/**` | Every commit must use the GitHub App bot email; GitHub renders these as `<owner>-agent[bot]` with the app avatar |
+| `agent-must-use-bot-identity` | branches matching `x-ai/<owner>/**` | Every commit must be signed and verified by GitHub |
 
 Human collaborators (write, maintain, admin roles) bypass both rulesets. The first ruleset excludes the agent prefix so it doesn't apply there; the second targets the agent prefix directly. Together they ensure the agent can only push to its own branches and every commit it makes is visibly attributed.
+
+The signature requirement enforces bot identity without needing a separate email-pattern rule. GitHub's verification logic requires that the committer email in the commit matches a verified email on the account that owns the signing key. The bot's noreply address (`APP_ID+owner-agent[bot]@users.noreply.github.com`) is only associated with the GitHub App bot account — no human can register it — so a commit carrying that email can only pass verification if GitHub signed it on behalf of the app. `authenticate-github.sh` configures git to use this email, so agent commits are rendered as `<owner>-agent[bot]` with the app avatar in the GitHub UI.
 
 ## Agent branch naming
 
