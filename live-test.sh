@@ -4,7 +4,7 @@
 # Run this from an agent machine after authenticate-github.sh has been executed.
 # It tests branch-level push restrictions and commit identity enforcement:
 #
-#   Branch restrictions (agent-blocked-from-non-agent-branches ruleset):
+#   Branch restrictions (agent-gh-access-apps-blocked-from-non-ai-branches ruleset):
 #     - push to default branch          → must be blocked
 #     - push to non-prefixed branch     → must be blocked
 #     - push to wrong-owner prefix      → must be blocked
@@ -20,7 +20,7 @@
 #   ./live-test.sh <owner/repo> <agent-owner-login>
 #
 # If <agent-owner-login> is omitted the script reads the allowed branch prefix
-# from the repo's "agent-blocked-from-non-agent-branches" ruleset.
+# from the repo's "agent-gh-access-apps-blocked-from-non-ai-branches" ruleset.
 set -uo pipefail
 
 # ── Args ──────────────────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ done
 if [[ -z "$AGENT_OWNER" ]]; then
   # The list endpoint omits conditions; fetch the ruleset by ID to get them.
   RULESET_ID=$(gh api "/repos/${REPO}/rulesets" \
-    --jq '.[] | select(.name == "agent-blocked-from-non-agent-branches") | .id' || true)
+    --jq '.[] | select(.name == "agent-gh-access-apps-blocked-from-non-ai-branches") | .id' || true)
   if [[ -n "$RULESET_ID" ]]; then
     RAW_PREFIX=$(gh api "/repos/${REPO}/rulesets/${RULESET_ID}" \
       --jq '.conditions.ref_name.exclude[0]' || true)

@@ -226,7 +226,7 @@ elif [[ "\$*" == *"/access_tokens" ]]; then
 elif [[ "\$*" == *"/installation/repositories" ]]; then
   printf '{"repositories":[{"id":101,"full_name":"${TEST_OWNER}/testrepo"}]}'
 elif [[ "\$*" == */rulesets ]]; then
-  printf '[{"name":"agent-blocked-from-non-agent-branches"},{"name":"agent-must-use-bot-identity"}]'
+  printf '[{"name":"agent-gh-access-apps-blocked-from-non-ai-branches"},{"name":"agent-gh-access-apps-must-sign"}]'
 else
   printf '{}'
 fi
@@ -260,15 +260,9 @@ printf '%s' "$SUCCESS_OUTPUT" | grep -q "x-ai/${TEST_OWNER}/" \
   && ok  "output: branch prefix contains owner login" \
   || fail "output: branch prefix contains owner login"
 
-printf '%s' "$SUCCESS_OUTPUT" | grep -q "Git Data API" \
-  && ok  "output: commit method directive mentions Git Data API" \
-  || fail "output: commit method directive mentions Git Data API"
-
-printf '%s' "$SUCCESS_OUTPUT" | grep -q "git/\.\.\." \
-  && ok  "output: commit method directive shows Git Data API path" \
-  || fail "output: commit method directive shows Git Data API path"
-
 for trigger in \
+  "Invalid username or password" \
+  "Authentication failed" \
   "Bad credentials" \
   "gh auth login"
 do
@@ -333,10 +327,10 @@ fi
 #   args with ".id"    = _old_ruleset_id    → output ID or nothing
 if [[ "\$args" == *"/repos/${TEST_OWNER}/testrepo/rulesets"* && "\$args" != *"--method POST"* ]]; then
   if [[ "${ruleset_state}" == "has-existing-ruleset" ]]; then
-    if [[ "\$args" == *"agent-must-use-bot-identity"* && "\$args" == *".id"* ]]; then printf '43'; \
+    if [[ "\$args" == *"agent-gh-access-apps-must-sign"* && "\$args" == *".id"* ]]; then printf '43'; \
     elif [[ "\$args" == *".id"* ]];    then printf '42'; \
     elif [[ "\$args" == *"length"* ]]; then printf '2'; \
-    else printf '[{"name":"agent-blocked-from-non-agent-branches","id":42},{"name":"agent-must-use-bot-identity","id":43}]'; fi
+    else printf '[{"name":"agent-gh-access-apps-blocked-from-non-ai-branches","id":42},{"name":"agent-gh-access-apps-must-sign","id":43}]'; fi
   else
     # no existing ruleset: length=0, .id=<empty>
     [[ "\$args" == *"length"* ]] && printf '0' || true

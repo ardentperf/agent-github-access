@@ -295,7 +295,7 @@ PROTECTED_IDS=$(
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "https://api.github.com/repos/${full_name}/rulesets" \
-        | jq '[.[] | select(.name == "agent-blocked-from-non-agent-branches" or .name == "agent-must-use-bot-identity")] | length' \
+        | jq '[.[] | select(.name == "agent-gh-access-apps-blocked-from-non-ai-branches" or .name == "agent-gh-access-apps-must-sign")] | length' \
         || echo "0")
       if [[ "${count:-0}" -eq 2 ]]; then
         printf '%s\n' "$repo_id"
@@ -339,7 +339,7 @@ fi
 
 # ── Configure git identity as the app bot ────────────────────────────────────
 # Commits authored with this identity are displayed as ${OWNER_LOGIN}-agent[bot]
-# in the GitHub UI. The agent-must-use-bot-identity ruleset requires signed
+# in the GitHub UI. The agent-gh-access-apps-must-sign ruleset requires signed
 # commits on agent branches; the GitHub App signs commits server-side.
 git config --global user.name "${OWNER_LOGIN}-agent[bot]"
 git config --global user.email "${APP_ID}+${OWNER_LOGIN}-agent[bot]@users.noreply.github.com"
@@ -353,13 +353,11 @@ echo "STORE IN GLOBAL MEMORY (not repo-local — applies across all repos):"
 echo ""
 echo "BRANCH PREFIX: x-ai/${OWNER_LOGIN}/"
 echo "  e.g. x-ai/${OWNER_LOGIN}/fix-deploy-workflow"
-echo "  GitHub enforces this server-side. Never push to main or any other prefix."
-echo ""
-echo "COMMIT METHOD: gh api repos/${OWNER_LOGIN}/{repo}/git/... (GitHub Git Data API)"
-echo "  Do NOT use git commit + git push. Agent branches require signed commits;"
-echo "  only API-created commits are signed automatically."
+echo "  GitHub rejects pushes to any other prefix. Never push to main."
 echo ""
 echo "RE-RUN ${SCRIPT_PATH} before retrying if you see:"
+echo "  remote: Invalid username or password."
+echo "  fatal: Authentication failed for 'https://github.com/'"
 echo "  HTTP 401 or \"Bad credentials\" from api.github.com"
 echo "  gh: To use GitHub CLI, please run: gh auth login"
 echo ""
@@ -504,7 +502,7 @@ if [[ -n "$INSTALLED" ]]; then
     [[ -z "$rname" || ! "$rname" == */* ]] && continue
     [[ "$rname" == "$TARGET_REPO" ]] && continue
     HAS_RULESET=$(gh api "/repos/${rname}/rulesets" \
-      --jq '[.[] | select(.name == "agent-blocked-from-non-agent-branches")] | length' || echo 0)
+      --jq '[.[] | select(.name == "agent-gh-access-apps-blocked-from-non-ai-branches")] | length' || echo 0)
     if [[ "$HAS_RULESET" == "0" ]]; then
       echo "Warning: ${rname} is missing branch protection rules — removing from installation." >&2
       gh api \
@@ -522,7 +520,7 @@ echo "  Agent branch prefix: ${AGENT_BRANCH_PREFIX}/**"
 echo ""
 
 # ── Remove any existing same-named rulesets (handles app re-creation) ─────────
-for _ruleset_name in "agent-blocked-from-non-agent-branches" "agent-must-use-bot-identity"; do
+for _ruleset_name in "agent-gh-access-apps-blocked-from-non-ai-branches" "agent-gh-access-apps-must-sign"; do
   _old_id=$(gh api "/repos/${TARGET_REPO}/rulesets" \
     --jq ".[] | select(.name == \"${_ruleset_name}\") | .id" \
     | head -1 || true)
@@ -554,7 +552,7 @@ gh api \
   --silent \
   --input - << EOF
 {
-  "name": "agent-blocked-from-non-agent-branches",
+  "name": "agent-gh-access-apps-blocked-from-non-ai-branches",
   "target": "branch",
   "enforcement": "active",
   "bypass_actors": ${BYPASS_ACTORS},
@@ -587,7 +585,7 @@ gh api \
   --silent \
   --input - << EOF
 {
-  "name": "agent-must-use-bot-identity",
+  "name": "agent-gh-access-apps-must-sign",
   "target": "branch",
   "enforcement": "active",
   "bypass_actors": ${BYPASS_ACTORS},

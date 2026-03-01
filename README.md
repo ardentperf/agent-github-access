@@ -8,7 +8,7 @@ A dedicated **GitHub App** acts as the agent's identity. Repository rulesets enf
 
 `create-agent-app.sh` generates a self-contained `authenticate-github.sh` with the app credentials embedded. Copy that single file to the agent's sandbox — it handles token generation, git configuration, and gh CLI authentication.
 
-> **Warning:** By default, rulesets will also block any other GitHub Apps installed on the repo (e.g. CI bots, Dependabot) from pushing to non-agent branches. If another app stops being able to push after onboarding, go to **Settings → Rules → Rulesets → agent-blocked-from-non-agent-branches** and add it manually under **Bypass list**.
+> **Warning:** By default, rulesets will also block any other GitHub Apps installed on the repo (e.g. CI bots, Dependabot) from pushing to non-agent branches. If another app stops being able to push after onboarding, go to **Settings → Rules → Rulesets → agent-gh-access-apps-blocked-from-non-ai-branches** and add it manually under **Bypass list**.
 
 ```mermaid
 flowchart TD
@@ -97,8 +97,8 @@ For each onboarded repo, `onboard-repo.sh` creates two GitHub rulesets:
 
 | Ruleset | Covers | Effect |
 |---|---|---|
-| `agent-blocked-from-non-agent-branches` | all branches **except** `x-ai/<owner>/**` | Agent app cannot push outside its prefix |
-| `agent-must-use-bot-identity` | branches matching `x-ai/<owner>/**` | Every commit must be signed and verified by GitHub |
+| `agent-gh-access-apps-blocked-from-non-ai-branches` | all branches **except** `x-ai/<owner>/**` | Agent app cannot push outside its prefix |
+| `agent-gh-access-apps-must-sign` | branches matching `x-ai/<owner>/**` | Every commit must be signed and verified by GitHub |
 
 Human collaborators (write, maintain, admin roles) bypass both rulesets. The first ruleset excludes the agent prefix so it doesn't apply there; the second targets the agent prefix directly. Together they ensure the agent can only push to its own branches and every commit it makes is visibly attributed.
 
@@ -132,6 +132,8 @@ Delete the old app first (**Settings → Developer settings → GitHub Apps → 
 
 The agent's token expires after ~1 hour. The agent must re-run `authenticate-github.sh` whenever it sees any of:
 
+- `remote: Invalid username or password.`
+- `fatal: Authentication failed for 'https://github.com/'`
 - HTTP 401 or `Bad credentials` from api.github.com
 - `gh: To use GitHub CLI, please run: gh auth login`
 
@@ -143,18 +145,16 @@ The branch naming rule and credential refresh procedure apply across **all** rep
 
 ### Suggested global AGENTS.md content
 
-When the agent runs `~/authenticate-github.sh` it prints exactly what to store, with your GitHub username filled in. You can also pre-populate the global file manually so the rules are in place from the first session. Either way, the content looks like this — **replace `<your-github-username>` with your actual GitHub username before saving**:
+When the agent runs `~/authenticate-github.sh` it prints exactly what to store. You can also pre-populate the global file manually so the rules are in place from the first session. Either way, the content looks like this — **replace `<your-github-username>` with your actual GitHub username before saving**:
 
 ```
 BRANCH PREFIX: x-ai/<your-github-username>/
   e.g. x-ai/<your-github-username>/fix-deploy-workflow
-  GitHub enforces this server-side. Never push to main or any other prefix.
-
-COMMIT METHOD: gh api repos/<your-github-username>/{repo}/git/... (GitHub Git Data API)
-  Do NOT use git commit + git push. Agent branches require signed commits;
-  only API-created commits are signed automatically.
+  GitHub rejects pushes to any other prefix. Never push to main.
 
 RE-RUN ~/authenticate-github.sh before retrying if you see:
+  remote: Invalid username or password.
+  fatal: Authentication failed for 'https://github.com/'
   HTTP 401 or "Bad credentials" from api.github.com
   gh: To use GitHub CLI, please run: gh auth login
 ```
