@@ -534,12 +534,11 @@ for _ruleset_name in "agent-blocked-from-non-agent-branches" "agent-must-use-bot
   fi
 done
 
-# ── Single ruleset: block agent app from all branches except its own prefix ────
-# The agent prefix is in the exclude list, so the ruleset simply does not apply
-# there — no bypass_actors entry is needed for the agent app.
-# bypass_actors lists every other actor that should not be restricted:
-#   • RepositoryRole 2 = maintain, 4 = write, 5 = admin  (not hierarchical)
-#   • Every other GitHub App installed on this repo (CI, Dependabot, etc.)
+# ── Build bypass_actors list ──────────────────────────────────────────────────
+# Always includes human roles (write, maintain, admin).
+# Attempts to also include other installed GitHub Apps, but the /user/installations
+# endpoint returns 403 with a standard personal token (requires installation scope),
+# so in practice only the human roles are added.
 BYPASS_ACTORS=$(
   # Seed with human roles
   roles='[
@@ -604,7 +603,7 @@ echo "  ✓ Ruleset: agent blocked from all branches except ${AGENT_BRANCH_PREFI
 # ── Ruleset: enforce bot identity on commits to agent branches ────────────────
 # Commits to x-ai/<owner>/** must use the GitHub App bot email address.
 # This makes every agent commit appear as <owner>-agent[bot] in the GitHub UI.
-# Human contributors (write, maintain, admin roles) and other installed apps bypass.
+# Human contributors (write, maintain, admin roles) bypass.
 gh api \
   --method POST \
   -H "Accept: application/vnd.github+json" \
