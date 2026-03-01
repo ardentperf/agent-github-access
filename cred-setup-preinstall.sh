@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# prereq-setup-creds.sh — optional helper that generates a pre-filled GitHub URL to create
+# cred-setup-preinstall.sh — optional helper that generates a pre-filled GitHub URL to create
 # a fine-grained PAT for use with install.sh and onboard-repo.sh.
 # You can also go to GitHub Settings → Developer settings → Personal access tokens
 # → Fine-grained tokens → Generate new token and fill in the settings manually.

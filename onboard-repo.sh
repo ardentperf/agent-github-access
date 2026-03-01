@@ -158,8 +158,8 @@ EOF
 
 echo "  ✓ Ruleset: agent commits must be signed on ${AGENT_BRANCH_PREFIX}/**"
 
-# ── Trigger audit workflow ────────────────────────────────────────────────────
-gh workflow run audit.yml \
+# ── Trigger inventory workflow ────────────────────────────────────────────────────
+gh workflow run inventory.yml \
   --repo "${OWNER_LOGIN}/agent-github-access" 2>/dev/null || true
 
 echo ""

@@ -1,4 +1,4 @@
-name: App Access Audit
+name: App Access Inventory
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  audit:
+  inventory:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,4 +18,4 @@ jobs:
           GH_APP_ID: ${{ secrets.GH_APP_ID }}
           GH_APP_PEM_B64: ${{ secrets.GH_APP_PEM }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash internal/audit.sh
+        run: bash internal/inventory.sh

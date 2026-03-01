@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# audit.sh — checks that every repo the agent app is installed on has the
+# inventory.sh — checks that every repo the agent app is installed on has the
 # expected branch protection rulesets. Exits non-zero if any are missing.
 #
-# Called by .github/workflows/audit.yml with GH_APP_ID and GH_APP_PEM_B64
+# Called by .github/workflows/inventory.yml with GH_APP_ID and GH_APP_PEM_B64
 # set from Actions secrets. Can also be run locally with those vars exported.
 set -euo pipefail
 

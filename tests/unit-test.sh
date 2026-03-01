@@ -279,6 +279,14 @@ printf '%s' "$SUCCESS_OUTPUT" | grep -q "x-ai/${TEST_OWNER}/" \
   && ok  "output: branch prefix contains owner login" \
   || fail "output: branch prefix contains owner login"
 
+printf '%s' "$SUCCESS_OUTPUT" | grep -q "COMMIT METHOD" \
+  && ok  "output: commit method directive present" \
+  || fail "output: commit method directive present"
+
+printf '%s' "$SUCCESS_OUTPUT" | grep -q "Git Data API" \
+  && ok  "output: commit method mentions Git Data API" \
+  || fail "output: commit method mentions Git Data API"
+
 for trigger in \
   "Invalid username or password" \
   "Authentication failed" \
@@ -319,7 +327,7 @@ if [[ "\$args" == *"user"* && "\$args" == *".login"* ]]; then
   exit 0
 fi
 
-# gh workflow run — silently succeed (audit is now in a separate GH Actions workflow)
+# gh workflow run — silently succeed (inventory is now in a separate GH Actions workflow)
 if [[ "\$args" == *"workflow run"* ]]; then
   exit 0
 fi
@@ -506,78 +514,78 @@ printf '%s' "$REPLACE_OUTPUT" | grep -qi "replacing existing" \
   || fail "onboard replace-ruleset: output mentions replacing"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# audit.sh tests
+# inventory.sh tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
-TEST_AUDIT="$DIR/internal/audit.sh"
+TEST_INVENTORY="$DIR/internal/inventory.sh"
 
-bash -n "$TEST_AUDIT" 2>/dev/null \
-  && ok  "syntax: audit.sh" \
-  || fail "syntax: audit.sh"
+bash -n "$TEST_INVENTORY" 2>/dev/null \
+  && ok  "syntax: inventory.sh" \
+  || fail "syntax: inventory.sh"
 
-# Helper: run audit.sh with a mock curl and given env vars.
+# Helper: run inventory.sh with a mock curl and given env vars.
 # $1 = curl mock path, $2 = GH_APP_ID, $3 = GH_APP_PEM_B64
 # $4 = workdir (optional; for inventory tests — must contain a bare git repo)
 # $5 = GITHUB_TOKEN (optional; set to enable inventory update)
-run_audit() {
+run_inventory() {
   local curl_mock="$1" app_id="$2" pem_b64="$3" workdir="${4:-$TMPDIR_T}" token="${5:-}"
-  local audit_bin="$TMPDIR_T/audit-bin"
-  mkdir -p "$audit_bin"
-  cp "$curl_mock" "$audit_bin/curl"
+  local inventory_bin="$TMPDIR_T/inventory-bin"
+  mkdir -p "$inventory_bin"
+  cp "$curl_mock" "$inventory_bin/curl"
   GH_APP_ID="$app_id" GH_APP_PEM_B64="$pem_b64" GITHUB_TOKEN="$token" \
-    PATH="$audit_bin:$PATH" bash "$TEST_AUDIT" 2>&1 || true
+    PATH="$inventory_bin:$PATH" bash "$TEST_INVENTORY" 2>&1 || true
 }
-run_audit_exit() {
+run_inventory_exit() {
   local curl_mock="$1" app_id="$2" pem_b64="$3" workdir="${4:-$TMPDIR_T}" token="${5:-}"
-  local audit_bin="$TMPDIR_T/audit-bin"
-  mkdir -p "$audit_bin"
-  cp "$curl_mock" "$audit_bin/curl"
+  local inventory_bin="$TMPDIR_T/inventory-bin"
+  mkdir -p "$inventory_bin"
+  cp "$curl_mock" "$inventory_bin/curl"
   GH_APP_ID="$app_id" GH_APP_PEM_B64="$pem_b64" GITHUB_TOKEN="$token" \
-    PATH="$audit_bin:$PATH" bash "$TEST_AUDIT" > /dev/null 2>&1; echo $?
+    PATH="$inventory_bin:$PATH" bash "$TEST_INVENTORY" > /dev/null 2>&1; echo $?
 }
 
 # A valid base64-encoded PEM for JWT signing
-AUDIT_PEM_B64=$(base64 < "$TEST_KEY_FILE" | tr -d '\n')
+INVENTORY_PEM_B64=$(base64 < "$TEST_KEY_FILE" | tr -d '\n')
 
-# ── audit: missing secrets → exits non-zero with error ───────────────────────
+# ── inventory: missing secrets → exits non-zero with error ───────────────────────
 
-NOSEC_BIN="$TMPDIR_T/audit-nosec-curl"
+NOSEC_BIN="$TMPDIR_T/inventory-nosec-curl"
 printf '#!/usr/bin/env bash\nprintf "[]"' > "$NOSEC_BIN"; chmod +x "$NOSEC_BIN"
 
-NOSEC_EXIT=$(run_audit_exit "$NOSEC_BIN" "" "")
-NOSEC_OUTPUT=$(run_audit "$NOSEC_BIN" "" "")
+NOSEC_EXIT=$(run_inventory_exit "$NOSEC_BIN" "" "")
+NOSEC_OUTPUT=$(run_inventory "$NOSEC_BIN" "" "")
 
 [[ "$NOSEC_EXIT" != "0" ]] \
-  && ok  "audit missing-secrets: exits non-zero" \
-  || fail "audit missing-secrets: exits non-zero"
+  && ok  "inventory missing-secrets: exits non-zero" \
+  || fail "inventory missing-secrets: exits non-zero"
 
 printf '%s' "$NOSEC_OUTPUT" | grep -q "GH_APP_ID" \
-  && ok  "audit missing-secrets: error mentions GH_APP_ID" \
-  || fail "audit missing-secrets: error mentions GH_APP_ID"
+  && ok  "inventory missing-secrets: error mentions GH_APP_ID" \
+  || fail "inventory missing-secrets: error mentions GH_APP_ID"
 
-# ── audit: no installation found → exits non-zero ────────────────────────────
+# ── inventory: no installation found → exits non-zero ────────────────────────────
 
-NOINST_CURL="$TMPDIR_T/audit-noinst-curl"
+NOINST_CURL="$TMPDIR_T/inventory-noinst-curl"
 cat > "$NOINST_CURL" << 'EOF'
 #!/usr/bin/env bash
 printf '[]'
 EOF
 chmod +x "$NOINST_CURL"
 
-NOINST_EXIT=$(run_audit_exit "$NOINST_CURL" "$TEST_APP_ID" "$AUDIT_PEM_B64")
-NOINST_OUTPUT=$(run_audit "$NOINST_CURL" "$TEST_APP_ID" "$AUDIT_PEM_B64")
+NOINST_EXIT=$(run_inventory_exit "$NOINST_CURL" "$TEST_APP_ID" "$INVENTORY_PEM_B64")
+NOINST_OUTPUT=$(run_inventory "$NOINST_CURL" "$TEST_APP_ID" "$INVENTORY_PEM_B64")
 
 [[ "$NOINST_EXIT" != "0" ]] \
-  && ok  "audit no-installation: exits non-zero" \
-  || fail "audit no-installation: exits non-zero"
+  && ok  "inventory no-installation: exits non-zero" \
+  || fail "inventory no-installation: exits non-zero"
 
 printf '%s' "$NOINST_OUTPUT" | grep -q "no installation" \
-  && ok  "audit no-installation: error mentions no installation" \
-  || fail "audit no-installation: error mentions no installation"
+  && ok  "inventory no-installation: error mentions no installation" \
+  || fail "inventory no-installation: error mentions no installation"
 
-# ── audit: all repos protected → exits 0, prints PASS ────────────────────────
+# ── inventory: all repos protected → exits 0, prints PASS ────────────────────────
 
-ALLPASS_CURL="$TMPDIR_T/audit-allpass-curl"
+ALLPASS_CURL="$TMPDIR_T/inventory-allpass-curl"
 cat > "$ALLPASS_CURL" << MOCKEOF
 #!/usr/bin/env bash
 if [[ "\$*" == *"/app/installations"* && "\$*" != *"access_tokens"* ]]; then
@@ -592,24 +600,24 @@ fi
 MOCKEOF
 chmod +x "$ALLPASS_CURL"
 
-ALLPASS_EXIT=$(run_audit_exit "$ALLPASS_CURL" "$TEST_APP_ID" "$AUDIT_PEM_B64")
-ALLPASS_OUTPUT=$(run_audit "$ALLPASS_CURL" "$TEST_APP_ID" "$AUDIT_PEM_B64")
+ALLPASS_EXIT=$(run_inventory_exit "$ALLPASS_CURL" "$TEST_APP_ID" "$INVENTORY_PEM_B64")
+ALLPASS_OUTPUT=$(run_inventory "$ALLPASS_CURL" "$TEST_APP_ID" "$INVENTORY_PEM_B64")
 
 [[ "$ALLPASS_EXIT" == "0" ]] \
-  && ok  "audit all-protected: exits 0" \
-  || fail "audit all-protected: exits 0 (got $ALLPASS_EXIT)"
+  && ok  "inventory all-protected: exits 0" \
+  || fail "inventory all-protected: exits 0 (got $ALLPASS_EXIT)"
 
 printf '%s' "$ALLPASS_OUTPUT" | grep -q "PASS  ${TEST_OWNER}/repo1" \
-  && ok  "audit all-protected: prints PASS for each repo" \
-  || fail "audit all-protected: prints PASS for each repo"
+  && ok  "inventory all-protected: prints PASS for each repo" \
+  || fail "inventory all-protected: prints PASS for each repo"
 
 printf '%s' "$ALLPASS_OUTPUT" | grep -q "All installed repos" \
-  && ok  "audit all-protected: prints success summary" \
-  || fail "audit all-protected: prints success summary"
+  && ok  "inventory all-protected: prints success summary" \
+  || fail "inventory all-protected: prints success summary"
 
-# ── audit: one repo missing rulesets → exits non-zero, prints FAIL ───────────
+# ── inventory: one repo missing rulesets → exits non-zero, prints FAIL ───────────
 
-ONEFAIL_CURL="$TMPDIR_T/audit-onefail-curl"
+ONEFAIL_CURL="$TMPDIR_T/inventory-onefail-curl"
 cat > "$ONEFAIL_CURL" << MOCKEOF
 #!/usr/bin/env bash
 if [[ "\$*" == *"/app/installations"* && "\$*" != *"access_tokens"* ]]; then
@@ -626,30 +634,30 @@ fi
 MOCKEOF
 chmod +x "$ONEFAIL_CURL"
 
-ONEFAIL_EXIT=$(run_audit_exit "$ONEFAIL_CURL" "$TEST_APP_ID" "$AUDIT_PEM_B64")
-ONEFAIL_OUTPUT=$(run_audit "$ONEFAIL_CURL" "$TEST_APP_ID" "$AUDIT_PEM_B64")
+ONEFAIL_EXIT=$(run_inventory_exit "$ONEFAIL_CURL" "$TEST_APP_ID" "$INVENTORY_PEM_B64")
+ONEFAIL_OUTPUT=$(run_inventory "$ONEFAIL_CURL" "$TEST_APP_ID" "$INVENTORY_PEM_B64")
 
 [[ "$ONEFAIL_EXIT" != "0" ]] \
-  && ok  "audit one-failing: exits non-zero" \
-  || fail "audit one-failing: exits non-zero (got $ONEFAIL_EXIT)"
+  && ok  "inventory one-failing: exits non-zero" \
+  || fail "inventory one-failing: exits non-zero (got $ONEFAIL_EXIT)"
 
 printf '%s' "$ONEFAIL_OUTPUT" | grep -q "PASS  ${TEST_OWNER}/good" \
-  && ok  "audit one-failing: prints PASS for protected repo" \
-  || fail "audit one-failing: prints PASS for protected repo"
+  && ok  "inventory one-failing: prints PASS for protected repo" \
+  || fail "inventory one-failing: prints PASS for protected repo"
 
 printf '%s' "$ONEFAIL_OUTPUT" | grep -q "FAIL  ${TEST_OWNER}/bad" \
-  && ok  "audit one-failing: prints FAIL for unprotected repo" \
-  || fail "audit one-failing: prints FAIL for unprotected repo"
+  && ok  "inventory one-failing: prints FAIL for unprotected repo" \
+  || fail "inventory one-failing: prints FAIL for unprotected repo"
 
 printf '%s' "$ONEFAIL_OUTPUT" | grep -q "onboard-repo.sh" \
-  && ok  "audit one-failing: error mentions onboard-repo.sh" \
-  || fail "audit one-failing: error mentions onboard-repo.sh"
+  && ok  "inventory one-failing: error mentions onboard-repo.sh" \
+  || fail "inventory one-failing: error mentions onboard-repo.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# audit.sh inventory tests (GITHUB_TOKEN path)
+# inventory.sh inventory tests (GITHUB_TOKEN path)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Set up a minimal git repo so audit.sh can commit inventory updates.
+# Set up a minimal git repo so inventory.sh can commit inventory updates.
 INV_REPO="$TMPDIR_T/inv-repo"
 mkdir -p "$INV_REPO"
 git -C "$INV_REPO" init -q
@@ -662,18 +670,18 @@ git -C "$INV_REPO" commit -q -m "init"
 
 # Mock git that delegates to real git but suppresses push
 REAL_GIT=$(command -v git)
-AUDIT_GIT_BIN="$TMPDIR_T/audit-git-bin"
-mkdir -p "$AUDIT_GIT_BIN"
-cat > "$AUDIT_GIT_BIN/git" << GITEOF
+INVENTORY_GIT_BIN="$TMPDIR_T/inventory-git-bin"
+mkdir -p "$INVENTORY_GIT_BIN"
+cat > "$INVENTORY_GIT_BIN/git" << GITEOF
 #!/usr/bin/env bash
 if [[ "\$1" == "push" ]]; then exit 0; fi
 exec "${REAL_GIT}" "\$@"
 GITEOF
-chmod +x "$AUDIT_GIT_BIN/git"
+chmod +x "$INVENTORY_GIT_BIN/git"
 
 # curl mock returning two repos, both protected
-INV_CURL="$TMPDIR_T/audit-inv-curl"
-cat > "$INV_CURL" << MOCKEOF
+INVENTORY_CURL="$TMPDIR_T/inventory-inv-curl"
+cat > "$INVENTORY_CURL" << MOCKEOF
 #!/usr/bin/env bash
 if [[ "\$*" == *"/app/installations"* && "\$*" != *"access_tokens"* ]]; then
   printf '[{"id":42}]'
@@ -685,72 +693,72 @@ elif [[ "\$*" == *"/rulesets"* ]]; then
   printf '[{"name":"agent-gh-access-apps-blocked-from-non-ai-branches"},{"name":"agent-gh-access-apps-must-sign"}]'
 fi
 MOCKEOF
-chmod +x "$INV_CURL"
+chmod +x "$INVENTORY_CURL"
 
-# Run audit twice with GITHUB_TOKEN set to test cumulative behaviour
-cp "$INV_CURL" "$TMPDIR_T/audit-bin/curl"
+# Run inventory twice with GITHUB_TOKEN set to test cumulative behaviour
+cp "$INVENTORY_CURL" "$TMPDIR_T/inventory-bin/curl"
 for _run in 1 2; do
   (cd "$INV_REPO" && \
-    GH_APP_ID="$TEST_APP_ID" GH_APP_PEM_B64="$AUDIT_PEM_B64" GITHUB_TOKEN="fake" \
-    PATH="$AUDIT_GIT_BIN:$TMPDIR_T/audit-bin:$PATH" \
-    bash "$TEST_AUDIT" > /dev/null 2>&1 || true)
+    GH_APP_ID="$TEST_APP_ID" GH_APP_PEM_B64="$INVENTORY_PEM_B64" GITHUB_TOKEN="fake" \
+    PATH="$INVENTORY_GIT_BIN:$TMPDIR_T/inventory-bin:$PATH" \
+    bash "$TEST_INVENTORY" > /dev/null 2>&1 || true)
 done
 
 INV_FILE="$INV_REPO/onboarded-repos.txt"
 
 [[ -f "$INV_FILE" ]] \
-  && ok  "audit inventory: onboarded-repos.txt created" \
-  || fail "audit inventory: onboarded-repos.txt created"
+  && ok  "inventory inventory: onboarded-repos.txt created" \
+  || fail "inventory inventory: onboarded-repos.txt created"
 
 head -1 "$INV_FILE" | grep -q "^# app-id:${TEST_APP_ID}$" \
-  && ok  "audit inventory: first line is app-id comment" \
-  || fail "audit inventory: first line is app-id comment"
+  && ok  "inventory inventory: first line is app-id comment" \
+  || fail "inventory inventory: first line is app-id comment"
 
 grep -qx "${TEST_OWNER}/repo1" "$INV_FILE" \
-  && ok  "audit inventory: repo1 present" \
-  || fail "audit inventory: repo1 present"
+  && ok  "inventory inventory: repo1 present" \
+  || fail "inventory inventory: repo1 present"
 
 grep -qx "${TEST_OWNER}/repo2" "$INV_FILE" \
-  && ok  "audit inventory: repo2 present" \
-  || fail "audit inventory: repo2 present"
+  && ok  "inventory inventory: repo2 present" \
+  || fail "inventory inventory: repo2 present"
 
 # Verify no duplicates after two runs
 REPO1_COUNT=$(grep -cx "${TEST_OWNER}/repo1" "$INV_FILE" || true)
 [[ "$REPO1_COUNT" == "1" ]] \
-  && ok  "audit inventory: no duplicate entries after two runs" \
-  || fail "audit inventory: no duplicate entries after two runs (count=$REPO1_COUNT)"
+  && ok  "inventory inventory: no duplicate entries after two runs" \
+  || fail "inventory inventory: no duplicate entries after two runs (count=$REPO1_COUNT)"
 
-# ── audit inventory: app-id change resets file ───────────────────────────────
+# ── inventory: app-id change resets file ───────────────────────────────
 
 NEW_APP_ID="111222"
-cp "$INV_CURL" "$TMPDIR_T/audit-bin/curl"
+cp "$INVENTORY_CURL" "$TMPDIR_T/inventory-bin/curl"
 (cd "$INV_REPO" && \
-  GH_APP_ID="$NEW_APP_ID" GH_APP_PEM_B64="$AUDIT_PEM_B64" GITHUB_TOKEN="fake" \
-  PATH="$AUDIT_GIT_BIN:$TMPDIR_T/audit-bin:$PATH" \
-  bash "$TEST_AUDIT" > /dev/null 2>&1 || true)
+  GH_APP_ID="$NEW_APP_ID" GH_APP_PEM_B64="$INVENTORY_PEM_B64" GITHUB_TOKEN="fake" \
+  PATH="$INVENTORY_GIT_BIN:$TMPDIR_T/inventory-bin:$PATH" \
+  bash "$TEST_INVENTORY" > /dev/null 2>&1 || true)
 
 head -1 "$INV_FILE" | grep -q "^# app-id:${NEW_APP_ID}$" \
-  && ok  "audit inventory: app-id change resets header" \
-  || fail "audit inventory: app-id change resets header"
+  && ok  "inventory inventory: app-id change resets header" \
+  || fail "inventory inventory: app-id change resets header"
 
 grep -qx "${TEST_OWNER}/repo1" "$INV_FILE" \
-  && ok  "audit inventory: repos repopulated after reset" \
-  || fail "audit inventory: repos repopulated after reset"
+  && ok  "inventory inventory: repos repopulated after reset" \
+  || fail "inventory inventory: repos repopulated after reset"
 
 # Old app-id must not appear anywhere in the file
 grep -q "app-id:${TEST_APP_ID}" "$INV_FILE" \
-  && fail "audit inventory: old app-id still present after reset" \
-  || ok  "audit inventory: old app-id gone after reset"
+  && fail "inventory inventory: old app-id still present after reset" \
+  || ok  "inventory inventory: old app-id gone after reset"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# cleanup.sh tests
+# uninstall.sh tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
-TEST_CLEANUP="$DIR/cleanup.sh"
+TEST_CLEANUP="$DIR/uninstall.sh"
 
 bash -n "$TEST_CLEANUP" 2>/dev/null \
-  && ok  "syntax: cleanup.sh" \
-  || fail "syntax: cleanup.sh"
+  && ok  "syntax: uninstall.sh" \
+  || fail "syntax: uninstall.sh"
 
 # Shared mock gh for cleanup tests: handles user login, secret existence/deletion,
 # ruleset listing/deletion. $1 controls secret existence ("has-secrets"|"no-secrets").
@@ -761,6 +769,12 @@ write_cleanup_mock_gh() {
 args="\$*"
 if [[ "\$args" == *"user"* && "\$args" == *".login"* ]]; then
   printf '%s' "${TEST_OWNER}"
+  exit 0
+fi
+if [[ "\$args" == *"contents/onboarded-repos.txt"* ]]; then
+  # Return base64-encoded inventory content
+  CONTENT=\$(printf '# app-id:%s\n%s/repo1\n%s/repo2\n' "${TEST_APP_ID}" "${TEST_OWNER}" "${TEST_OWNER}" | base64 | tr -d '\n')
+  printf '{"content":"%s"}' "\$CONTENT"
   exit 0
 fi
 if [[ "\$args" == *"secrets/GH_APP_ID"* && "\$args" != *"DELETE"* ]]; then

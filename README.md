@@ -1,5 +1,6 @@
 [![Unit Tests](https://github.com/ardentperf/agent-github-access/actions/workflows/test.yml/badge.svg)](https://github.com/ardentperf/agent-github-access/actions/workflows/test.yml)
-[![App Access Audit](https://github.com/ardentperf/agent-github-access/actions/workflows/audit.yml/badge.svg)](https://github.com/ardentperf/agent-github-access/actions/workflows/audit.yml)
+[![E2E Tests](https://github.com/ardentperf/agent-github-access/actions/workflows/e2e.yml/badge.svg)](https://github.com/ardentperf/agent-github-access/actions/workflows/e2e.yml)
+[![App Access Inventory](https://github.com/ardentperf/agent-github-access/actions/workflows/inventory.yml/badge.svg)](https://github.com/ardentperf/agent-github-access/actions/workflows/inventory.yml)
 
 # Agent GitHub Access
 
@@ -23,13 +24,13 @@ flowchart TD
         F(["Fork this repo
 do not rename it"]) --> P
         P(["Create fine-grained PAT
-GitHub UI or prereq-setup-creds.sh"])
+GitHub UI or cred-setup-preinstall.sh"])
     end
 
     subgraph fork["agent-github-access fork — GitHub (your account)"]
         SEC["🔒 Secrets: GH_APP_ID, GH_APP_PEM"]
         INV["📄 onboarded-repos.txt"]
-        AU(["Audit workflow
+        AU(["Inventory workflow
 scheduled daily + on each onboard"])
         AU --> AUC{"All installed repos
 have both rulesets?"}
@@ -88,10 +89,10 @@ In the GitHub UI, create a fine-grained PAT with these settings:
 - **Permissions**: Administration (read/write), Secrets (read/write)
 - **Expiration**: 90 days recommended
 
-`prereq-setup-creds.sh` is provided as a reference and convenience — read it to understand exactly what is being requested, then run it on any machine where you are logged in to GitHub in a browser to get a pre-filled URL:
+`cred-setup-preinstall.sh` is provided as a reference and convenience — read it to understand exactly what is being requested, then run it on any machine where you are logged in to GitHub in a browser to get a pre-filled URL:
 
 ```bash
-./prereq-setup-creds.sh <github-username>
+./cred-setup-preinstall.sh <github-username>
 ```
 
 **2. Authenticate gh with the PAT** *(any machine, PAT only)*
@@ -189,13 +190,13 @@ New token requests are blocked immediately — the agent can no longer refresh i
 ## Uninstalling / full cleanup
 
 1. **Delete the GitHub App** — Settings → Developer settings → GitHub Apps → your app → Edit → Advanced → Delete GitHub App. This immediately revokes all tokens and removes the app from every installed repo.
-2. **Run `cleanup.sh`** — deletes the fork secrets and removes the two `agent-gh-access-*` rulesets from every repo in the inventory:
+2. **Run `uninstall.sh`** — deletes the fork secrets and removes the two `agent-gh-access-*` rulesets from every repo in the inventory:
 
 ```bash
-./cleanup.sh
+./uninstall.sh
 ```
 
-The script reads the app ID from `onboarded-repos.txt` (committed to the fork by the audit workflow) and will prompt you to delete the app if it detects it still exists before proceeding.
+The script reads the app ID from `onboarded-repos.txt` (committed to the fork by the inventory workflow) and will prompt you to delete the app if it detects it still exists before proceeding.
 
 To reinstall from scratch after a full cleanup, re-run `install.sh` and `onboard-repo.sh` as in the original setup.
 

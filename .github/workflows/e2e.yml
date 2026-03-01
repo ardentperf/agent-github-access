@@ -1,0 +1,19 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * *'  # daily at 07:00 UTC (after inventory at 06:00)
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get install -y jq
+      - name: Run e2e tests
+        env:
+          GH_APP_ID: ${{ secrets.GH_APP_ID }}
+          GH_APP_PEM_B64: ${{ secrets.GH_APP_PEM }}
+        run: bash tests/e2e-test.sh

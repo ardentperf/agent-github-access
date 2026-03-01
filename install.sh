@@ -383,6 +383,10 @@ echo "BRANCH PREFIX: x-ai/${OWNER_LOGIN}/"
 echo "  e.g. x-ai/${OWNER_LOGIN}/fix-deploy-workflow"
 echo "  GitHub rejects pushes to any other prefix. Never push to main."
 echo ""
+echo "COMMIT METHOD: gh api repos/${OWNER_LOGIN}/{repo}/git/... (GitHub Git Data API)"
+echo "  Do NOT use git commit + git push. Agent branches require signed commits;"
+echo "  only API-created commits are signed automatically."
+echo ""
 echo "RE-RUN ${SCRIPT_PATH} before retrying if you see:"
 echo "  remote: Invalid username or password."
 echo "  fatal: Authentication failed for 'https://github.com/'"
@@ -402,7 +406,7 @@ chmod 700 "$OUTFILE"
 
 # ── Store app credentials as secrets in the fork ──────────────────────────────
 # GH_APP_ID and GH_APP_PEM are stored in the fork's Actions secrets so the
-# audit workflow can use them. Secrets require libsodium box encryption.
+# inventory workflow can use them. Secrets require libsodium box encryption.
 echo "Storing app credentials in ${FORK_REPO} secrets…"
 
 python3 - "$APP_ID" "$PEM_B64" "$FORK_REPO" << 'PYEOF'

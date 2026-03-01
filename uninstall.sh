@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cleanup.sh — removes all agent-github-access state after the GitHub App has
+# uninstall.sh — removes all agent-github-access state after the GitHub App has
 # been deleted. Run this after deleting the app in the GitHub UI.
 #
 # What it does:
@@ -13,12 +13,28 @@
 set -euo pipefail
 
 INVENTORY="onboarded-repos.txt"
+OWNER_LOGIN=$(gh api user --jq '.login')
+FORK_REPO="${OWNER_LOGIN}/agent-github-access"
+
+# ── Fetch latest inventory from fork ─────────────────────────────────────────
+echo "Fetching latest inventory from ${FORK_REPO}…"
+REMOTE_INV=$(gh api "/repos/${FORK_REPO}/contents/${INVENTORY}" \
+  --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || true)
+if [[ -n "$REMOTE_INV" ]]; then
+  printf '%s' "$REMOTE_INV" > "$INVENTORY"
+  echo "  ✓ Inventory updated from fork."
+elif [[ ! -f "$INVENTORY" ]]; then
+  echo "Error: ${INVENTORY} not found locally or in fork." >&2
+  echo "  Ensure the inventory workflow has run at least once." >&2
+  exit 1
+else
+  echo "  – Could not fetch from fork; using local copy."
+fi
+echo ""
 
 # ── Read app ID and derive slug ───────────────────────────────────────────────
 if [[ ! -f "$INVENTORY" ]]; then
   echo "Error: ${INVENTORY} not found." >&2
-  echo "  Run this script from your agent-github-access fork directory," >&2
-  echo "  or ensure the audit workflow has run at least once to create the file." >&2
   exit 1
 fi
 
@@ -29,9 +45,7 @@ if [[ "$HEADER" != "# app-id:"* ]]; then
 fi
 
 APP_ID="${HEADER#\# app-id:}"
-OWNER_LOGIN=$(gh api user --jq '.login')
 APP_SLUG="${OWNER_LOGIN}-agent"
-FORK_REPO="${OWNER_LOGIN}/agent-github-access"
 
 echo "App ID:   ${APP_ID}"
 echo "App slug: ${APP_SLUG}"
