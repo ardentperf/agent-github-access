@@ -661,11 +661,14 @@ printf '%s' "$ONEFAIL_OUTPUT" | grep -q "onboard-repo.sh" \
 # We mock curl to intercept all API calls and capture the blob content uploaded.
 
 INV_BLOB_LOG="$TMPDIR_T/inv-blob.log"
+INV_TREE_LOG="$TMPDIR_T/inv-tree.log"
 
 # Helper: build a curl mock for inventory tests.
-# $1 = path to write mock, $2 = existing inventory content to return (empty = 404)
+# $1 = path to write mock
+# $2 = existing inventory content to return (empty = branch/file not found)
+# $3 = "branch-exists" | "" — whether the inventory branch ref exists
 write_inv_curl() {
-  local mock_path="$1" existing_inv="$2"
+  local mock_path="$1" existing_inv="$2" branch_state="${3:-}"
   local existing_b64=""
   if [[ -n "$existing_inv" ]]; then
     existing_b64=$(printf '%s' "$existing_inv" | base64 | tr -d '\n')
@@ -688,7 +691,6 @@ elif [[ "\$args" == *"inventory---internal-do-not-delete"* && "\$args" == *"cont
     exit 1
   fi
 elif [[ "\$args" == *"/git/blobs"* ]]; then
-  # Capture the blob content from -d arg for inspection
   for i in "\$@"; do
     if [[ "\$i" == *"content"* ]]; then
       printf '%s' "\$i" >> "${INV_BLOB_LOG}"
@@ -698,19 +700,27 @@ elif [[ "\$args" == *"/git/blobs"* ]]; then
   printf '{"sha":"mockblobsha"}'
 elif [[ "\$args" == *"/git/ref/heads/main"* ]]; then
   printf '{"object":{"sha":"mainsha"}}'
-elif [[ "\$args" == *"/git/commits/mainsha"* || "\$args" == *"/git/commits/mainsha"* ]]; then
-  printf '{"tree":{"sha":"maintreesha"}}'
-elif [[ "\$args" == *"/git/trees"* ]]; then
-  printf '{"sha":"newtreesha"}'
-elif [[ "\$args" == *"/git/commits"* ]]; then
-  printf '{"sha":"newcommitsha"}'
 elif [[ "\$args" == *"/git/ref/heads/"*"inventory"* ]]; then
-  # Branch existence check — return empty to simulate not existing on first run
-  if [[ -f "${INV_BLOB_LOG}" ]]; then
-    printf '{"ref":"refs/heads/x-ai/${TEST_OWNER}/inventory---internal-do-not-delete"}'
+  if [[ "${branch_state}" == "branch-exists" ]]; then
+    printf '{"object":{"sha":"invbranchsha"}}'
   else
     exit 1
   fi
+elif [[ "\$args" == *"/git/commits/invbranchsha"* ]]; then
+  printf '{"tree":{"sha":"invtreesha"}}'
+elif [[ "\$args" == *"/git/commits/mainsha"* ]]; then
+  printf '{"tree":{"sha":"maintreesha"}}'
+elif [[ "\$args" == *"/git/trees"* ]]; then
+  # Capture tree payload for inspection
+  for i in "\$@"; do
+    if [[ "\$i" == "{"* ]]; then
+      printf '%s' "\$i" >> "${INV_TREE_LOG}"
+      printf '\n' >> "${INV_TREE_LOG}"
+    fi
+  done
+  printf '{"sha":"newtreesha"}'
+elif [[ "\$args" == *"/git/commits"* ]]; then
+  printf '{"sha":"newcommitsha"}'
 elif [[ "\$args" == *"/git/refs"* ]]; then
   printf '{"ref":"refs/heads/x-ai/${TEST_OWNER}/inventory---internal-do-not-delete"}'
 fi
@@ -726,9 +736,9 @@ get_inv_content() {
 }
 
 # ── Run 1: no existing inventory ──────────────────────────────────────────────
-rm -f "$INV_BLOB_LOG"
+rm -f "$INV_BLOB_LOG" "$INV_TREE_LOG"
 INV_CURL1="$TMPDIR_T/inv-curl-run1"
-write_inv_curl "$INV_CURL1" ""
+write_inv_curl "$INV_CURL1" "" ""
 cp "$INV_CURL1" "$TMPDIR_T/inventory-bin/curl"
 
 GH_APP_ID="$TEST_APP_ID" GH_APP_PEM_B64="$INVENTORY_PEM_B64" GITHUB_TOKEN="fake" \
@@ -750,9 +760,9 @@ printf '%s' "$INV_CONTENT1" | grep -qx "${TEST_OWNER}/repo2" \
   || fail "inventory inventory: repo2 present"
 
 # ── Run 2: existing inventory returned — no duplicates ────────────────────────
-rm -f "$INV_BLOB_LOG"
+rm -f "$INV_BLOB_LOG" "$INV_TREE_LOG"
 INV_CURL2="$TMPDIR_T/inv-curl-run2"
-write_inv_curl "$INV_CURL2" "$INV_CONTENT1"
+write_inv_curl "$INV_CURL2" "$INV_CONTENT1" "branch-exists"
 cp "$INV_CURL2" "$TMPDIR_T/inventory-bin/curl"
 
 GH_APP_ID="$TEST_APP_ID" GH_APP_PEM_B64="$INVENTORY_PEM_B64" GITHUB_TOKEN="fake" \
@@ -772,10 +782,10 @@ fi
   || fail "inventory inventory: no duplicate entries after two runs (count=$REPO1_COUNT)"
 
 # ── Run 3: app-id change resets inventory ─────────────────────────────────────
-rm -f "$INV_BLOB_LOG"
+rm -f "$INV_BLOB_LOG" "$INV_TREE_LOG"
 NEW_APP_ID="111222"
 INV_CURL3="$TMPDIR_T/inv-curl-run3"
-write_inv_curl "$INV_CURL3" "$INV_CONTENT1"
+write_inv_curl "$INV_CURL3" "$INV_CONTENT1" "branch-exists"
 cp "$INV_CURL3" "$TMPDIR_T/inventory-bin/curl"
 
 GH_APP_ID="$NEW_APP_ID" GH_APP_PEM_B64="$INVENTORY_PEM_B64" GITHUB_TOKEN="fake" \
@@ -795,6 +805,59 @@ printf '%s' "$INV_CONTENT3" | grep -qx "${TEST_OWNER}/repo1" \
 printf '%s' "$INV_CONTENT3" | grep -q "app-id:${TEST_APP_ID}" \
   && fail "inventory inventory: old app-id still present after reset" \
   || ok  "inventory inventory: old app-id gone after reset"
+
+# ── Run 4: init — tree created without base_tree (only inventory file) ────────
+rm -f "$INV_BLOB_LOG" "$INV_TREE_LOG"
+INV_CURL4="$TMPDIR_T/inv-curl-run4"
+write_inv_curl "$INV_CURL4" "" ""
+cp "$INV_CURL4" "$TMPDIR_T/inventory-bin/curl"
+
+GH_APP_ID="$TEST_APP_ID" GH_APP_PEM_B64="$INVENTORY_PEM_B64" GITHUB_TOKEN="fake" \
+  PATH="$TMPDIR_T/inventory-bin:$PATH" \
+  bash "$TEST_INVENTORY" > /dev/null 2>&1 || true
+
+TREE_PAYLOAD4=$(cat "$INV_TREE_LOG" 2>/dev/null || true)
+printf '%s' "$TREE_PAYLOAD4" | grep -qv "base_tree" \
+  && ok  "inventory init: tree created without base_tree" \
+  || fail "inventory init: tree created without base_tree"
+
+printf '%s' "$TREE_PAYLOAD4" | grep -q "onboarded-repos.txt" \
+  && ok  "inventory init: tree contains onboarded-repos.txt" \
+  || fail "inventory init: tree contains onboarded-repos.txt"
+
+# ── Run 5: update — tree uses inventory branch's own tree as base_tree ────────
+rm -f "$INV_BLOB_LOG" "$INV_TREE_LOG"
+INV_CURL5="$TMPDIR_T/inv-curl-run5"
+write_inv_curl "$INV_CURL5" "$INV_CONTENT1" "branch-exists"
+cp "$INV_CURL5" "$TMPDIR_T/inventory-bin/curl"
+
+GH_APP_ID="$TEST_APP_ID" GH_APP_PEM_B64="$INVENTORY_PEM_B64" GITHUB_TOKEN="fake" \
+  PATH="$TMPDIR_T/inventory-bin:$PATH" \
+  bash "$TEST_INVENTORY" > /dev/null 2>&1 || true
+
+TREE_PAYLOAD5=$(cat "$INV_TREE_LOG" 2>/dev/null || true)
+printf '%s' "$TREE_PAYLOAD5" | grep -q "invtreesha" \
+  && ok  "inventory update: tree uses inventory branch tree as base_tree" \
+  || fail "inventory update: tree uses inventory branch tree as base_tree"
+
+printf '%s' "$TREE_PAYLOAD5" | grep -qv "maintreesha" \
+  && ok  "inventory update: tree does not use main's tree as base_tree" \
+  || fail "inventory update: tree does not use main's tree as base_tree"
+
+# ── Run 6: app-id reset — treated as init, no base_tree ──────────────────────
+rm -f "$INV_BLOB_LOG" "$INV_TREE_LOG"
+INV_CURL6="$TMPDIR_T/inv-curl-run6"
+write_inv_curl "$INV_CURL6" "$INV_CONTENT1" "branch-exists"
+cp "$INV_CURL6" "$TMPDIR_T/inventory-bin/curl"
+
+GH_APP_ID="$NEW_APP_ID" GH_APP_PEM_B64="$INVENTORY_PEM_B64" GITHUB_TOKEN="fake" \
+  PATH="$TMPDIR_T/inventory-bin:$PATH" \
+  bash "$TEST_INVENTORY" > /dev/null 2>&1 || true
+
+TREE_PAYLOAD6=$(cat "$INV_TREE_LOG" 2>/dev/null || true)
+printf '%s' "$TREE_PAYLOAD6" | grep -qv "base_tree" \
+  && ok  "inventory app-id reset: tree created without base_tree" \
+  || fail "inventory app-id reset: tree created without base_tree"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # uninstall.sh tests
