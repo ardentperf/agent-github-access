@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# install.sh — creates the GitHub App and generates authenticate-github.sh.
+#
+# Requires: gh CLI authenticated with the install PAT (Administration read/write,
+#   Secrets read/write, Contents read/write on agent-github-access fork only).
 set -euo pipefail
 
 
@@ -55,12 +59,97 @@ fi
 # Not currently enabled — uncomment in the jq block below to activate:
 #   issues: "write"   create and update issue comments
 
+# ── Actions permission prompt ─────────────────────────────────────────────────
+# actions:write lets the agent trigger workflow_dispatch runs (useful for CI,
+# deployments, etc.) but carries risk: the agent also has workflows:write, so
+# it can create its own workflows and trigger them — a potential sandbox escape.
+# Triggered workflows run with GITHUB_TOKEN and can read any Actions secrets.
+# Ask the user to make an explicit choice — no default.
+echo "The agent app can be granted 'actions:write' permission, which lets it"
+echo "trigger, cancel, and re-run GitHub Actions workflows in installed repos."
+echo ""
+echo "  RISK: Because the agent also has 'workflows:write', it could write a"
+echo "  workflow and then trigger it. Branch protection still applies to the"
+echo "  triggered workflow, but it would run with GITHUB_TOKEN and could read"
+echo "  all Actions secrets in the repo (deploy keys, cloud credentials, etc.)."
+echo ""
+echo "  Only grant this if your repos have no sensitive Actions secrets."
+echo ""
+while true; do
+  read -r -p "Grant actions:write to the agent app? [Y/n]: " ACTIONS_WRITE
+  case "$ACTIONS_WRITE" in
+    y|Y|"") ACTIONS_PERMISSION='"write"'; echo ""; break ;;
+    n|N)    ACTIONS_PERMISSION='"read"';  echo ""; break ;;
+    *) echo "Please answer y or n." ;;
+  esac
+done
+
 # ── Onboard the fork before the app is created ───────────────────────────────
 # Sets up branch protection rulesets on the fork so they are in place the
 # moment the app is installed. Safe to re-run — onboard-repo.sh is idempotent.
 echo "Setting up branch protection on ${USERNAME}/agent-github-access…"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 bash "${SCRIPT_DIR}/onboard-repo.sh" "${USERNAME}/agent-github-access"
+echo ""
+
+# ── Initialize inventory branch ──────────────────────────────────────────────
+# The inventory branch must exist before the inventory workflow runs.
+# It cannot be created from within Actions because the required_signatures
+# ruleset blocks unsigned Git Data API commits. The install PAT is human-authed
+# so the signing ruleset does not apply to its pushes.
+# Creates a minimal tree with only onboarded-repos.txt (no base_tree) so the
+# branch contains exactly one file. Skip if the branch already exists.
+INV_BRANCH="x-ai/${USERNAME}/inventory---internal-do-not-delete"
+echo "Checking inventory branch (${INV_BRANCH})…"
+ENCODED_INV_BRANCH=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$INV_BRANCH")
+INV_BRANCH_EXISTS=$(gh api \
+  "/repos/${FORK_REPO}/git/ref/heads/${ENCODED_INV_BRANCH}" \
+  --jq '.ref // empty' 2>/dev/null || true)
+if [[ -n "$INV_BRANCH_EXISTS" ]]; then
+  echo "  ✓ Inventory branch already exists — skipping init."
+else
+  echo "  Initializing inventory branch…"
+  HEADER_LINE="# app-id:placeholder"
+  INIT_CONTENT=$(printf '%s\n' "$HEADER_LINE" | base64 | tr -d '\n')
+  # Create blob
+  BLOB_SHA=$(gh api \
+    --method POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "/repos/${FORK_REPO}/git/blobs" \
+    --field "content=${INIT_CONTENT}" \
+    --field encoding=base64 \
+    --jq '.sha')
+  # Create tree with only onboarded-repos.txt
+  TREE_SHA=$(gh api \
+    --method POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "/repos/${FORK_REPO}/git/trees" \
+    --input - << TREEEOF | jq -r '.sha'
+{"tree":[{"path":"onboarded-repos.txt","mode":"100644","type":"blob","sha":"${BLOB_SHA}"}]}
+TREEEOF
+)
+  # Create commit (no parent — orphan commit; human PAT so signing ruleset doesn't apply)
+  COMMIT_SHA=$(gh api \
+    --method POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "/repos/${FORK_REPO}/git/commits" \
+    --field "message=chore: init inventory branch" \
+    --field "tree=${TREE_SHA}" \
+    --jq '.sha')
+  # Create branch ref
+  gh api \
+    --method POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "/repos/${FORK_REPO}/git/refs" \
+    --field "ref=refs/heads/${INV_BRANCH}" \
+    --field "sha=${COMMIT_SHA}" \
+    --silent
+  echo "  ✓ Inventory branch created."
+fi
 echo ""
 
 # ── Find a free port ─────────────────────────────────────────────────────────
@@ -70,9 +159,10 @@ PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('localhost',0)); p=
 
 # ── Manifest ─────────────────────────────────────────────────────────────────
 MANIFEST=$(jq -n \
-  --arg name "$APP_NAME" \
-  --arg url  "https://github.com/${USERNAME}" \
-  --arg cb   "http://localhost:${PORT}/callback" \
+  --arg name             "$APP_NAME" \
+  --arg url              "https://github.com/${USERNAME}" \
+  --arg cb               "http://localhost:${PORT}/callback" \
+  --argjson actions_perm "$ACTIONS_PERMISSION" \
   '{
     name:         $name,
     url:          $url,
@@ -80,13 +170,13 @@ MANIFEST=$(jq -n \
     public:       true,
     hook_attributes: { url: "https://example.com", active: false },
     default_permissions: {
-      metadata:      "read",    # required by all apps
-      contents:      "write",   # push commits; create/delete branches
-      workflows:     "write",   # modify .github/workflows/ files
-      actions:       "write",   # trigger, cancel, and re-run workflow runs; read logs
-      checks:        "read",    # read check run and check suite results
-      pull_requests: "write"    # open, update, and merge pull requests
-      # issues: "write"         # create and update issue comments
+      metadata:      "read",         # required by all apps
+      contents:      "write",        # push commits; create/delete branches
+      workflows:     "write",        # modify .github/workflows/ files
+      actions:       $actions_perm,  # trigger/cancel/re-run workflows (user choice)
+      checks:        "read",         # read check run and check suite results
+      pull_requests: "write"         # open, update, and merge pull requests
+      # issues: "write"              # create and update issue comments
     },
     default_events: ["push", "workflow_run", "check_run", "pull_request"]
   }')

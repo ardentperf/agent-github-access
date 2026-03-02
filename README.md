@@ -22,9 +22,13 @@ You start by forking this repo into your personal account. Your `agent-github-ac
 flowchart TD
     subgraph admin["Your GitHub Account (browser, admin access)"]
         F(["Fork this repo
-do not rename it"]) --> P
-        P(["Create fine-grained PAT
-GitHub UI or cred-setup-preinstall.sh"])
+do not rename it"]) --> P1
+        P1(["Create install PAT
+Administration + Secrets + Contents
+on agent-github-access fork only"]) --> P2
+        P2(["Create onboard PAT
+Administration only
+on all repositories"])
     end
 
     subgraph fork["agent-github-access fork — GitHub (your account)"]
@@ -61,7 +65,8 @@ token valid ~1 hour*"]
 branch: x-ai/&lt;owner&gt;/…*"]
     end
 
-    P -.->|"copy PAT to setup machine"| A
+    P1 -.->|"copy install PAT to setup machine"| A
+    P2 -.->|"copy onboard PAT to setup machine"| R
     E -->|"stores app credentials"| SEC
     SEC -.->|"read on re-run"| B
     E -.->|"scp authenticate-github.sh agent-host:~/"| I
@@ -76,34 +81,50 @@ branch: x-ai/&lt;owner&gt;/…*"]
 
 ## Setup
 
-The setup process has two distinct privilege levels. Steps 0–1 require your GitHub credentials (admin access). Steps 2–5 require only the fine-grained PAT you create in step 1 — no classic token or OAuth session needed.
+The setup process uses two separate fine-grained PATs with minimal, non-overlapping scopes:
+
+| PAT | Used by | Repository access | Permissions | Lifetime |
+|---|---|---|---|---|
+| **Install PAT** | `install.sh`, `uninstall.sh` | `agent-github-access` fork only | Administration, Secrets, Contents | One-time; can expire/be deleted after install |
+| **Onboard PAT** | `onboard-repo.sh` | All repositories | Administration only | Keep active while onboarding repos |
 
 **0. Fork this repo** *(GitHub UI, admin access)*
 
 Fork `ardentperf/agent-github-access` into your personal GitHub account. Do not rename your fork of this repo — the repo name must stay `agent-github-access`.
 
-**1. Create a fine-grained PAT** *(GitHub UI, admin access)*
+**1a. Create the install PAT** *(GitHub UI, admin access)*
 
 In the GitHub UI, create a fine-grained PAT with these settings:
-- **Repository access**: your `agent-github-access` fork (`<username>/agent-github-access`) only
-- **Permissions**: Administration (read/write), Secrets (read/write)
-- **Expiration**: 90 days recommended
+- **Repository access**: your `agent-github-access` fork (`<username>/agent-github-access`) **only**
+- **Permissions**: Administration (read/write), Secrets (read/write), Contents (read/write)
+- **Expiration**: can be short (e.g. 7 days) — only needed for install and uninstall
 
-`cred-setup-preinstall.sh` is provided as a reference and convenience — read it to understand exactly what is being requested, then run it on any machine where you are logged in to GitHub in a browser to get a pre-filled URL:
-
-```bash
-./cred-setup-preinstall.sh <github-username>
-```
-
-**2. Authenticate gh with the PAT** *(any machine, PAT only)*
-
-On the machine where you will run the setup scripts:
+`cred-setup-preinstall.sh` is provided as a reference and convenience — run it on any machine where you are logged in to GitHub in a browser to get a pre-filled URL:
 
 ```bash
-echo '<your-pat>' | gh auth login --hostname github.com --with-token
+./cred-setup-preinstall.sh <github-username> install
 ```
 
-**3. Create the GitHub App and generate scripts** *(any machine, PAT only)*
+**1b. Create the onboard PAT** *(GitHub UI, admin access)*
+
+Create a second fine-grained PAT with these settings:
+- **Repository access**: **All repositories** (needed to create rulesets on repos you onboard)
+- **Permissions**: Administration (read/write) **only** — no Secrets, no Contents
+- **Expiration**: 90 days recommended; renew as needed
+
+```bash
+./cred-setup-preinstall.sh <github-username> onboard
+```
+
+**2. Authenticate gh with the install PAT** *(any machine, install PAT only)*
+
+On the machine where you will run `install.sh`:
+
+```bash
+echo '<your-install-pat>' | gh auth login --hostname github.com --with-token
+```
+
+**3. Create the GitHub App and generate scripts** *(any machine, install PAT only)*
 
 ```bash
 ./install.sh
@@ -113,11 +134,10 @@ echo '<your-pat>' | gh auth login --hostname github.com --with-token
 
 If `GH_APP_ID` is already set as a secret in your `agent-github-access` fork, the script will detect this and exit early — the app already exists. See [Uninstalling / full cleanup](#uninstalling--full-cleanup) if you need to start over.
 
-Two scripts are generated:
+One script is generated:
 - `authenticate-github.sh` — give this to the agent
-- `onboard-repo.sh` — run this per repo on the same machine
 
-The app ID and private key are stored as secrets in your `agent-github-access` fork (`GH_APP_ID` and `GH_APP_PEM`) so you don't need to keep the generated scripts around to re-run setup.
+The app ID and private key are stored as secrets in your `agent-github-access` fork (`GH_APP_ID` and `GH_APP_PEM`). The inventory branch is also initialized at this step.
 
 **4. Install the app** *(browser)*
 
@@ -128,9 +148,12 @@ A browser tab opens automatically. On the GitHub page:
 
 The `agent-github-access` fork already has its branch protection rules in place (applied in step 3), so there is no window of unguarded access.
 
-**5. Grant the agent access to a repository** *(any machine, PAT only)*
+**5. Grant the agent access to a repository** *(any machine, onboard PAT)*
+
+Switch to the onboard PAT, then run:
 
 ```bash
+echo '<your-onboard-pat>' | gh auth login --hostname github.com --with-token
 ./onboard-repo.sh repo
 # or for a repo outside your account:
 ./onboard-repo.sh owner/repo
@@ -180,7 +203,7 @@ The GitHub App is granted the following permissions on each installed repo:
 | Checks | read | read check run and check suite results |
 | Metadata | read | required by all GitHub Apps |
 
-> **Warning — `actions: write` scope:** With this permission the agent can trigger any `workflow_dispatch` workflow in any repo the app is installed on. Those workflows run with `GITHUB_TOKEN`, which has broad repo write access, and can read any Actions secrets defined in that repo (e.g. deployment keys, cloud credentials). This is appropriate for personal repos where you control all the workflows, but think carefully before installing the app on a repo that contains sensitive secrets or workflows you did not write. To reduce exposure, install the app only on repos you own and trust. You can restrict it further by editing `install.sh` and changing `actions` to `"read"` before running setup — you will lose the ability to have the agent trigger workflows, but all other functionality is unaffected.
+> **Warning — `actions: write` scope:** Because the agent also has `workflows: write`, it could write a workflow and then trigger it. Branch protection still applies to the triggered workflow, but it runs with `GITHUB_TOKEN` and can read all Actions secrets in the repo (deploy keys, cloud credentials, etc.). Only enable this if your repos have no sensitive Actions secrets. `install.sh` will ask you to make an explicit choice at setup time.
 
 ## Agent branch naming
 
@@ -205,13 +228,24 @@ New token requests are blocked immediately — the agent can no longer refresh i
 ## Uninstalling / full cleanup
 
 1. **Delete the GitHub App** — Settings → Developer settings → GitHub Apps → your app → Edit → Advanced → Delete GitHub App. This immediately revokes all tokens and removes the app from every installed repo.
-2. **Run `uninstall.sh`** — deletes the fork secrets and removes the two `agent-gh-access-*` rulesets from every repo in the inventory:
+
+2. **Run `uninstall.sh`** with the **install PAT** — deletes the fork secrets and generates `uninstall-rulesets.sh`:
 
 ```bash
+echo '<your-install-pat>' | gh auth login --hostname github.com --with-token
 ./uninstall.sh
 ```
 
-The script fetches the inventory from the `x-ai/<owner>/inventory---internal-do-not-delete` branch (maintained by the inventory workflow) and will prompt you to delete the app if it detects it still exists before proceeding.
+The script fetches the inventory from the `x-ai/<owner>/inventory---internal-do-not-delete` branch and will prompt you to delete the app if it detects it still exists before proceeding.
+
+3. **Run `uninstall-rulesets.sh`** with the **onboard PAT** — removes the two `agent-gh-access-*` rulesets from every repo in the inventory:
+
+```bash
+echo '<your-onboard-pat>' | gh auth login --hostname github.com --with-token
+./uninstall-rulesets.sh
+```
+
+`uninstall-rulesets.sh` is generated dynamically by `uninstall.sh` with the repo list embedded. It is not checked into the repository.
 
 To reinstall from scratch after a full cleanup, re-run `install.sh` and `onboard-repo.sh` as in the original setup.
 

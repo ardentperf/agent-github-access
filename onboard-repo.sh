@@ -5,8 +5,8 @@
 #
 # Usage: ./onboard-repo.sh <repo> or ./onboard-repo.sh <owner/repo>
 #
-# Requires: gh CLI authenticated with a fine-grained PAT that has
-#   Administration (read/write) and Secrets (read/write) on this fork.
+# Requires: gh CLI authenticated with the onboard PAT (Administration read/write
+#   on all repositories — no Secrets or Contents needed).
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
