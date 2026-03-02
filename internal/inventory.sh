@@ -144,16 +144,11 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     FILE_CONTENT=$(printf '%s' "$NEW_INV" | base64 | tr -d '\n')
 
     if [[ "$INITIALIZING" == "true" ]]; then
-      # Create branch from main HEAD (signed), then delete every file except
-      # onboarded-repos.txt via the Contents API so the branch is isolated.
-      # Each Contents API call produces a signed commit, satisfying the ruleset.
+      # Create branch from main HEAD if it doesn't exist, otherwise reuse it.
+      # Then delete every file except onboarded-repos.txt via the Contents API
+      # (each delete is a signed commit, satisfying required_signatures).
+      # onboarded-repos.txt is written last by the Contents API call below.
       echo "Creating inventory branch..."
-      MAIN_SHA=$(curl -sS --fail-with-body \
-        -H "Authorization: Bearer ${INSTALL_TOKEN}" \
-        -H "Accept: application/vnd.github+json" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        "https://api.github.com/repos/${FORK_REPO}/git/ref/heads/main" \
-        | jq -r '.object.sha')
       ENCODED_INV_BRANCH=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$INV_BRANCH")
       INV_BRANCH_EXISTS=$(curl -sS \
         -H "Authorization: Bearer ${INSTALL_TOKEN}" \
@@ -161,15 +156,13 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "https://api.github.com/repos/${FORK_REPO}/git/ref/heads/${ENCODED_INV_BRANCH}" \
         | jq -r '.ref // empty')
-      if [[ -n "$INV_BRANCH_EXISTS" ]]; then
-        curl -sS --fail-with-body -X PATCH \
+      if [[ -z "$INV_BRANCH_EXISTS" ]]; then
+        MAIN_SHA=$(curl -sS --fail-with-body \
           -H "Authorization: Bearer ${INSTALL_TOKEN}" \
           -H "Accept: application/vnd.github+json" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
-          -H "Content-Type: application/json" \
-          -d "{\"sha\":\"${MAIN_SHA}\",\"force\":true}" \
-          "https://api.github.com/repos/${FORK_REPO}/git/refs/heads/${ENCODED_INV_BRANCH}" > /dev/null
-      else
+          "https://api.github.com/repos/${FORK_REPO}/git/ref/heads/main" \
+          | jq -r '.object.sha')
         curl -sS --fail-with-body -X POST \
           -H "Authorization: Bearer ${INSTALL_TOKEN}" \
           -H "Accept: application/vnd.github+json" \
@@ -178,9 +171,9 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
           -d "{\"ref\":\"refs/heads/${INV_BRANCH}\",\"sha\":\"${MAIN_SHA}\"}" \
           "https://api.github.com/repos/${FORK_REPO}/git/refs" > /dev/null
       fi
-      # Delete every file from the branch (except onboarded-repos.txt which
-      # doesn't exist yet — it will be created by the Contents API call below)
+      # Delete every file except onboarded-repos.txt (signed commit per file)
       while IFS=$'\t' read -r fpath fsha; do
+        [[ "$fpath" == "onboarded-repos.txt" ]] && continue
         curl -sS --fail-with-body -X DELETE \
           -H "Authorization: Bearer ${INSTALL_TOKEN}" \
           -H "Accept: application/vnd.github+json" \
@@ -192,9 +185,20 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         -H "Authorization: Bearer ${INSTALL_TOKEN}" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        "https://api.github.com/repos/${FORK_REPO}/git/trees/${INV_BRANCH}?recursive=1" \
+        "https://api.github.com/repos/${FORK_REPO}/git/trees/${ENCODED_INV_BRANCH}?recursive=1" \
         | jq -r '.tree[] | select(.type == "blob") | [.path, .sha] | @tsv')
-      CONTENTS_PAYLOAD="{\"message\":\"chore: update onboarded-repos inventory\",\"content\":\"${FILE_CONTENT}\",\"branch\":\"${INV_BRANCH}\"}"
+      # onboarded-repos.txt: create if absent, update if present (from prior init)
+      CURRENT_FILE_SHA=$(curl -sS \
+        -H "Authorization: Bearer ${INSTALL_TOKEN}" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "https://api.github.com/repos/${FORK_REPO}/contents/onboarded-repos.txt?ref=${INV_BRANCH}" \
+        | jq -r '.sha // empty')
+      if [[ -n "$CURRENT_FILE_SHA" ]]; then
+        CONTENTS_PAYLOAD="{\"message\":\"chore: update onboarded-repos inventory\",\"content\":\"${FILE_CONTENT}\",\"sha\":\"${CURRENT_FILE_SHA}\",\"branch\":\"${INV_BRANCH}\"}"
+      else
+        CONTENTS_PAYLOAD="{\"message\":\"chore: update onboarded-repos inventory\",\"content\":\"${FILE_CONTENT}\",\"branch\":\"${INV_BRANCH}\"}"
+      fi
     else
       # Get current file SHA for the update
       CURRENT_FILE_SHA=$(curl -sS --fail-with-body \
