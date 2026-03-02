@@ -46,11 +46,17 @@ if [[ -z "${GH_APP_ID:-}" || -z "${GH_APP_PEM_B64:-}" ]]; then
   GH_APP_ID=$(grep '^APP_ID=' "$AUTH_SCRIPT" | cut -d'"' -f2)
   GH_APP_PEM_B64=$(grep '^APP_PEM_B64=' "$AUTH_SCRIPT" | cut -d'"' -f2)
   OWNER_LOGIN=$(grep '^OWNER_LOGIN=' "$AUTH_SCRIPT" | cut -d'"' -f2)
+  echo "Credentials: ~/authenticate-github.sh"
+  echo "  APP_ID:      ${GH_APP_ID}"
+  echo "  APP_PEM_B64: ${#GH_APP_PEM_B64} chars"
   if [[ -z "$GH_APP_ID" || -z "$GH_APP_PEM_B64" || -z "$OWNER_LOGIN" ]]; then
     echo "Error: could not parse credentials from $AUTH_SCRIPT." >&2
     exit 1
   fi
 else
+  echo "Credentials: environment variables"
+  echo "  GH_APP_ID:      ${GH_APP_ID}"
+  echo "  GH_APP_PEM_B64: ${#GH_APP_PEM_B64} chars"
   # Derive owner login from the app slug via the public /apps/{slug} endpoint.
   # The slug is <owner>-agent by convention; we need the owner for branch naming.
   OWNER_LOGIN=$(curl -sf \
