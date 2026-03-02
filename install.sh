@@ -411,41 +411,6 @@ PYEOF
 
 chmod 700 "$OUTFILE"
 
-# ── Store app credentials as secrets in the fork ──────────────────────────────
-# GH_APP_ID and GH_APP_PEM are stored in the fork's Actions secrets so the
-# inventory workflow can use them. Secrets require libsodium box encryption.
-echo "Storing app credentials in ${FORK_REPO} secrets…"
-
-python3 - "$APP_ID" "$PEM_B64" "$FORK_REPO" << 'PYEOF'
-import sys, json, subprocess, base64
-from nacl.encoding import Base64Encoder
-from nacl.public import PublicKey, SealedBox
-
-app_id, pem_b64, fork_repo = sys.argv[1], sys.argv[2], sys.argv[3]
-
-def get_public_key():
-    r = subprocess.run(
-        ["gh", "api", f"/repos/{fork_repo}/actions/secrets/public-key"],
-        capture_output=True, text=True, check=True)
-    d = json.loads(r.stdout)
-    return d["key_id"], d["key"]
-
-def put_secret(name, value, key_id, pub_key_b64):
-    pub_key = PublicKey(pub_key_b64, encoder=Base64Encoder)
-    encrypted = SealedBox(pub_key).encrypt(value.encode(), encoder=Base64Encoder).decode()
-    subprocess.run(
-        ["gh", "api", "--method", "PUT",
-         f"/repos/{fork_repo}/actions/secrets/{name}",
-         "--input", "-"],
-        input=json.dumps({"encrypted_value": encrypted, "key_id": key_id}),
-        text=True, check=True)
-
-key_id, pub_key = get_public_key()
-put_secret("GH_APP_ID",  app_id,  key_id, pub_key)
-put_secret("GH_APP_PEM", pem_b64, key_id, pub_key)
-print("  ✓ GH_APP_ID and GH_APP_PEM stored in fork secrets")
-PYEOF
-
 # ── Wait for app installation, then trigger inventory ────────────────────────
 # Poll GET /app/installations (via JWT) until at least one installation exists,
 # meaning the user has installed the app on at least one repo in the browser.
@@ -487,6 +452,44 @@ while true; do
   fi
   sleep 5
 done
+
+# ── Store app credentials as secrets in the fork ──────────────────────────────
+# GH_APP_ID and GH_APP_PEM are stored in the fork's Actions secrets so the
+# inventory workflow can use them. Secrets require libsodium box encryption.
+# Stored after installation is confirmed so a partial/abandoned install does
+# not block re-running install.sh (which checks for GH_APP_ID to detect existing apps).
+echo "Storing app credentials in ${FORK_REPO} secrets…"
+
+python3 - "$APP_ID" "$PEM_B64" "$FORK_REPO" << 'PYEOF'
+import sys, json, subprocess, base64
+from nacl.encoding import Base64Encoder
+from nacl.public import PublicKey, SealedBox
+
+app_id, pem_b64, fork_repo = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def get_public_key():
+    r = subprocess.run(
+        ["gh", "api", f"/repos/{fork_repo}/actions/secrets/public-key"],
+        capture_output=True, text=True, check=True)
+    d = json.loads(r.stdout)
+    return d["key_id"], d["key"]
+
+def put_secret(name, value, key_id, pub_key_b64):
+    pub_key = PublicKey(pub_key_b64, encoder=Base64Encoder)
+    encrypted = SealedBox(pub_key).encrypt(value.encode(), encoder=Base64Encoder).decode()
+    subprocess.run(
+        ["gh", "api", "--method", "PUT",
+         f"/repos/{fork_repo}/actions/secrets/{name}",
+         "--input", "-"],
+        input=json.dumps({"encrypted_value": encrypted, "key_id": key_id}),
+        text=True, check=True)
+
+key_id, pub_key = get_public_key()
+put_secret("GH_APP_ID",  app_id,  key_id, pub_key)
+put_secret("GH_APP_PEM", pem_b64, key_id, pub_key)
+print("  ✓ GH_APP_ID and GH_APP_PEM stored in fork secrets")
+PYEOF
+
 gh workflow run inventory.yml --repo "${FORK_REPO}" 2>/dev/null \
   && echo "  ✓ Inventory workflow triggered" \
   || echo "  (inventory workflow trigger skipped — run manually if needed)"
