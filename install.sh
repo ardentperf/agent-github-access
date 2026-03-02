@@ -141,9 +141,9 @@ PYEOF
 # which it already is, so the install URL is predictable before app creation.
 INSTALL_URL="https://github.com/apps/${APP_NAME}/installations/new"
 
-python3 - "$CODEFILE" "$PORT" "$TMPHTML" "$INSTALL_URL" <<'PYEOF' &
+python3 - "$CODEFILE" "$PORT" "$TMPHTML" "$INSTALL_URL" "${USERNAME}/agent-github-access" <<'PYEOF' &
 import sys, http.server, urllib.parse, os
-codefile, port, htmlfile, install_url = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+codefile, port, htmlfile, install_url, fork_repo = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
 
 done_html = (
     '<!DOCTYPE html><html><head><meta charset="utf-8">'
@@ -154,6 +154,7 @@ done_html = (
     'h2{margin-top:0}'
     'ol{padding-left:1.3em;line-height:1.8}'
     'code{font-size:.95em;background:rgba(128,128,128,.15);padding:.1em .35em;border-radius:3px}'
+    '.warn{margin-top:1rem;padding:.75rem 1rem;border-left:3px solid #d29922;background:rgba(210,153,34,.1);border-radius:0 4px 4px 0}'
     '.btn{display:inline-block;margin-top:1.5rem;padding:.65rem 1.4rem;background:#238636;color:#fff;text-decoration:none;border-radius:6px;font-size:1rem;font-weight:600}'
     '.btn:hover{background:#2ea043}'
     '</style>'
@@ -162,11 +163,11 @@ done_html = (
     '<p>Click <strong>Install</strong> below, then on the GitHub page:</p>'
     '<ol>'
     '<li>Choose <strong>Only select repositories</strong></li>'
-    '<li>Select <strong>one repo</strong> you want the agent to use</li>'
+    f'<li>Select <strong>only <code>{fork_repo}</code></strong> — this repo already has the required branch protection in place</li>'
     '<li>Click <strong>Install</strong></li>'
     '</ol>'
-    '<p>Then for each repo the agent should work in, run on this machine:</p>'
-    f'<p><code>./onboard-repo.sh &lt;repo&gt;</code></p>'
+    f'<div class="warn"><strong>Warning:</strong> Do not select any other repos here. Other repos must be added later using <code>./onboard-repo.sh &lt;repo&gt;</code> to set up branch protection first.</div>'
+    '<div class="warn" style="margin-top:.75rem"><strong>Keep authenticate-github.sh safe.</strong> This file contains the secret credentials for the app. If it is lost, the app must be uninstalled and reinstalled. To recover it, copy it from any agent machine that already has access: <code>scp user@agent-host:~/authenticate-github.sh .</code></div>'
     f'<a class="btn" href="{install_url}">Install on GitHub &#8594;</a>'
     '</div></body></html>'
 ).encode()
@@ -452,10 +453,16 @@ echo ""
 echo "Generated scripts:"
 echo "  ${OUTFILE}  — copy to the agent's \$HOME"
 echo ""
+echo "IMPORTANT: Keep ${OUTFILE} safe — it contains the secret credentials for the app."
+echo "  If lost, the app must be uninstalled and reinstalled."
+echo "  To recover it, copy it from any agent that already has access:"
+echo "    scp user@agent-host:~/authenticate-github.sh ."
+echo ""
 echo "Next steps:"
 echo "  1. A browser will open to install the app. Choose 'Only select repositories',"
-echo "     select your fork (${USERNAME}/agent-github-access) and click Install."
-echo "  2. For each repo the agent should work in:"
+echo "     select ONLY ${USERNAME}/agent-github-access, and click Install."
+echo "     (Other repos must be added later via ./onboard-repo.sh to set up branch protection first.)"
+echo "  2. For each additional repo the agent should work in:"
 echo "     ./onboard-repo.sh <repo>"
 echo "  3. Copy ${OUTFILE} to the agent: scp ${OUTFILE} user@agent-host:~/"
 echo ""
