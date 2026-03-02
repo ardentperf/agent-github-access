@@ -53,8 +53,7 @@ fi
 # owner will be prompted to approve the updated permissions on next install.
 #
 # Not currently enabled — uncomment in the jq block below to activate:
-#   pull_requests: "write"   open, update, and merge pull requests
-#   issues:        "write"   create and update issue comments
+#   issues: "write"   create and update issue comments
 
 # ── Onboard the fork before the app is created ───────────────────────────────
 # Sets up branch protection rulesets on the fork so they are in place the
@@ -85,12 +84,11 @@ MANIFEST=$(jq -n \
       contents:      "write",   # push commits; create/delete branches
       workflows:     "write",   # modify .github/workflows/ files
       actions:       "read",    # read workflow run logs and results
-      checks:        "read"     # read check run and check suite results
-      # pull_requests: "write", # open, update, and merge pull requests
-      # issues:        "write"  # create and update issue comments
+      checks:        "read",    # read check run and check suite results
+      pull_requests: "write"    # open, update, and merge pull requests
+      # issues: "write"         # create and update issue comments
     },
-    default_events: ["push", "workflow_run", "check_run"]
-    # default_events when pull_requests enabled: add "pull_request"
+    default_events: ["push", "workflow_run", "check_run", "pull_request"]
   }')
 
 # ── Temp files ───────────────────────────────────────────────────────────────
