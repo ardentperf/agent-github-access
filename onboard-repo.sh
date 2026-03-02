@@ -158,9 +158,13 @@ EOF
 
 echo "  ✓ Ruleset: agent commits must be signed on ${AGENT_BRANCH_PREFIX}/**"
 
-# ── Trigger inventory workflow ────────────────────────────────────────────────────
-gh workflow run inventory.yml \
-  --repo "${OWNER_LOGIN}/agent-github-access" 2>/dev/null || true
+# ── Trigger inventory workflow (only if app credentials are already stored) ───
+# During initial install, install.sh calls this script before the app exists.
+# Skip the trigger in that case; install.sh will trigger it after storing secrets.
+if gh api "/repos/${OWNER_LOGIN}/agent-github-access/actions/secrets/GH_APP_ID" --silent 2>/dev/null; then
+  gh workflow run inventory.yml \
+    --repo "${OWNER_LOGIN}/agent-github-access" 2>/dev/null || true
+fi
 
 echo ""
 echo "Done. The agent can now work in ${TARGET_REPO}."

@@ -206,6 +206,14 @@ else
     echo "  http://localhost:${PORT}/"
 fi
 
+echo "Step 1 of 2: Create the GitHub App"
+echo "  1. Click 'Create App on GitHub' in the browser"
+echo "  2. On the GitHub page, click 'Create GitHub App for ${USERNAME}'"
+echo "  3. You will be returned to the browser with next steps"
+echo ""
+echo "  WARNING: Do not change the app name on the GitHub page."
+echo "  The name '${APP_NAME}' must stay exactly as shown."
+echo ""
 echo "Waiting for you to confirm app creation in your browser…"
 wait "$SERVER_PID"
 
@@ -438,7 +446,47 @@ put_secret("GH_APP_PEM", pem_b64, key_id, pub_key)
 print("  ✓ GH_APP_ID and GH_APP_PEM stored in fork secrets")
 PYEOF
 
-# ── Trigger inventory workflow ────────────────────────────────────────────────
+# ── Wait for app installation, then trigger inventory ────────────────────────
+# Poll GET /app/installations (via JWT) until at least one installation exists,
+# meaning the user has installed the app on at least one repo in the browser.
+echo "Step 2 of 2: Install the app on a repository"
+echo "  In the browser, click 'Install on GitHub', then on the GitHub page:"
+echo "  1. Choose 'Only select repositories'"
+echo "  2. Select ONLY ${USERNAME}/agent-github-access"
+echo "     This repo already has the required branch protection in place."
+echo "  3. Click Install"
+echo ""
+echo "  WARNING: Do not select any other repos here."
+echo "  Other repos must be added later using ./onboard-repo.sh to set up branch protection first."
+echo ""
+echo "  If the browser didn't open: ${INSTALL_URL}"
+echo ""
+echo "Waiting…"
+APP_PEM=$(printf '%s' "$PEM_B64" | base64 -d)
+while true; do
+  NOW=$(date +%s)
+  EXP=$((NOW + 540))
+  b64url() { base64 | tr '+/' '-_' | tr -d '=\n'; }
+  JWT_HEADER=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+  JWT_PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":%d}' "$NOW" "$EXP" "$APP_ID" | b64url)
+  TMPKEY=$(mktemp "${TMPDIR:-/tmp}/gh-jwt-XXXXXX"); chmod 600 "$TMPKEY"
+  printf '%s' "$APP_PEM" > "$TMPKEY"
+  JWT_SIG=$(printf '%s.%s' "$JWT_HEADER" "$JWT_PAYLOAD" \
+    | openssl dgst -binary -sha256 -sign "$TMPKEY" | b64url)
+  rm -f "$TMPKEY"
+  INSTALL_JWT="${JWT_HEADER}.${JWT_PAYLOAD}.${JWT_SIG}"
+  INSTALL_ID=$(curl -sf \
+    -H "Authorization: Bearer ${INSTALL_JWT}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "https://api.github.com/app/installations" \
+    | jq -r '.[0].id // empty')
+  if [[ -n "$INSTALL_ID" ]]; then
+    echo "  ✓ App installation detected."
+    break
+  fi
+  sleep 5
+done
 gh workflow run inventory.yml --repo "${FORK_REPO}" 2>/dev/null \
   && echo "  ✓ Inventory workflow triggered" \
   || echo "  (inventory workflow trigger skipped — run manually if needed)"
@@ -459,13 +507,6 @@ echo "  To recover it, copy it from any agent that already has access:"
 echo "    scp user@agent-host:~/authenticate-github.sh ."
 echo ""
 echo "Next steps:"
-echo "  1. A browser will open to install the app. Choose 'Only select repositories',"
-echo "     select ONLY ${USERNAME}/agent-github-access, and click Install."
-echo "     (Other repos must be added later via ./onboard-repo.sh to set up branch protection first.)"
-echo "  2. For each additional repo the agent should work in:"
+echo "  1. For each additional repo the agent should work in:"
 echo "     ./onboard-repo.sh <repo>"
-echo "  3. Copy ${OUTFILE} to the agent: scp ${OUTFILE} user@agent-host:~/"
-echo ""
-echo "The browser tab will redirect to the installation page automatically."
-echo "If it does not, install manually at:"
-echo "  ${INSTALL_URL}"
+echo "  2. Copy ${OUTFILE} to the agent: scp ${OUTFILE} user@agent-host:~/"
