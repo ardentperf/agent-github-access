@@ -18,4 +18,9 @@ jobs:
           GH_APP_ID: ${{ secrets.GH_APP_ID }}
           GH_APP_PEM_B64: ${{ secrets.GH_APP_PEM }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash internal/inventory.sh
+        run: |
+          if [[ -z "$GH_APP_ID" || -z "$GH_APP_PEM_B64" ]]; then
+            echo "Skipping inventory: app not installed yet (GH_APP_ID/GH_APP_PEM not set)."
+            exit 0
+          fi
+          bash internal/inventory.sh
