@@ -154,13 +154,30 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "https://api.github.com/repos/${FORK_REPO}/git/ref/heads/main" \
         | jq -r '.object.sha')
-      curl -sS --fail-with-body -X POST \
+      ENCODED_INV_BRANCH=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$INV_BRANCH")
+      INV_BRANCH_EXISTS=$(curl -sS \
         -H "Authorization: Bearer ${INSTALL_TOKEN}" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        -H "Content-Type: application/json" \
-        -d "{\"ref\":\"refs/heads/${INV_BRANCH}\",\"sha\":\"${MAIN_SHA}\"}" \
-        "https://api.github.com/repos/${FORK_REPO}/git/refs" > /dev/null
+        "https://api.github.com/repos/${FORK_REPO}/git/ref/heads/${ENCODED_INV_BRANCH}" \
+        | jq -r '.ref // empty')
+      if [[ -n "$INV_BRANCH_EXISTS" ]]; then
+        curl -sS --fail-with-body -X PATCH \
+          -H "Authorization: Bearer ${INSTALL_TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          -H "Content-Type: application/json" \
+          -d "{\"sha\":\"${MAIN_SHA}\",\"force\":true}" \
+          "https://api.github.com/repos/${FORK_REPO}/git/refs/heads/${ENCODED_INV_BRANCH}" > /dev/null
+      else
+        curl -sS --fail-with-body -X POST \
+          -H "Authorization: Bearer ${INSTALL_TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          -H "Content-Type: application/json" \
+          -d "{\"ref\":\"refs/heads/${INV_BRANCH}\",\"sha\":\"${MAIN_SHA}\"}" \
+          "https://api.github.com/repos/${FORK_REPO}/git/refs" > /dev/null
+      fi
       # Delete every file from the branch (except onboarded-repos.txt which
       # doesn't exist yet — it will be created by the Contents API call below)
       while IFS=$'\t' read -r fpath fsha; do
