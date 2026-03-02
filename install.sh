@@ -167,7 +167,7 @@ done_html = (
     '<li>Select <strong>one repo</strong> you want the agent to use</li>'
     '<li>Click <strong>Install</strong></li>'
     '</ol>'
-    '<p>Then immediately run on this machine:</p>'
+    '<p>Then for each repo the agent should work in, run on this machine:</p>'
     f'<p><code>./onboard-repo.sh &lt;repo&gt;</code></p>'
     f'<a class="btn" href="{install_url}">Install on GitHub &#8594;</a>'
     '</div></body></html>'
@@ -453,7 +453,7 @@ echo ""
 echo "Next steps:"
 echo "  1. A browser will open to install the app. Choose 'Only select repositories',"
 echo "     select your fork (${USERNAME}/agent-github-access) and click Install."
-echo "  2. For each additional repo the agent should work in:"
+echo "  2. For each repo the agent should work in:"
 echo "     ./onboard-repo.sh <repo>"
 echo "  3. Copy ${OUTFILE} to the agent: scp ${OUTFILE} user@agent-host:~/"
 echo ""
