@@ -93,8 +93,13 @@ echo "All installed repos have required branch protection rulesets."
 
 # ── Update inventory branch ───────────────────────────────────────────────────
 # Only runs inside GitHub Actions (GITHUB_TOKEN is available).
-# Pushes onboarded-repos.txt to a dedicated agent branch via the GitHub API
-# so that the push is signed and doesn't require pushing to main.
+# Writes onboarded-repos.txt to a dedicated agent branch via the Contents API
+# so the branch tip is always a signed commit (required by the
+# agent-gh-access-apps-must-sign ruleset). The low-level Git Data API does not
+# produce signed commits, and GitHub validates the required_signatures ruleset
+# even on branch creation via the Refs API, so the branch must be seeded from
+# an already-signed commit. On first init the branch is created from main HEAD
+# (a signed commit) via the Refs API, then the file is written via Contents API.
 # First line is a comment with the app ID — if it changes (app recreated),
 # the file is reset so the inventory reflects only the current app.
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
@@ -117,6 +122,8 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     -H "X-GitHub-Api-Version: 2022-11-28" \
     "https://api.github.com/repos/${FORK_REPO}/contents/onboarded-repos.txt?ref=${INV_BRANCH}" \
     | jq -r '.content' | base64 -d || true)
+  # Normalize: ensure CURRENT_INV ends with a newline (base64 -d strips it)
+  [[ -n "$CURRENT_INV" && "${CURRENT_INV: -1}" != $'\n' ]] && CURRENT_INV="${CURRENT_INV}"$'\n'
 
   # Reset if app ID changed or branch doesn't exist yet
   if [[ -z "$CURRENT_INV" ]] || [[ "$(printf '%s' "$CURRENT_INV" | head -1)" != "$HEADER_LINE" ]]; then
@@ -136,114 +143,84 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
 
   # Only update if content changed
   if [[ "$NEW_INV" != "$CURRENT_INV" ]]; then
-    # Upload blob
-    echo "Uploading blob..."
-    BLOB_CONTENT=$(printf '%s' "$NEW_INV" | base64 | tr -d '\n')
-    BLOB_SHA=$(curl -sS --fail-with-body -X POST \
-      -H "Authorization: Bearer ${INSTALL_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      -H "Content-Type: application/json" \
-      -d "{\"content\":\"${BLOB_CONTENT}\",\"encoding\":\"base64\"}" \
-      "https://api.github.com/repos/${FORK_REPO}/git/blobs" \
-      | jq -r '.sha')
-
-    if [[ -z "$BLOB_SHA" || "$BLOB_SHA" == "null" ]]; then
-      echo "Error: failed to upload blob (got empty/null sha)." >&2
-      exit 1
-    fi
-
-    # Get parent commit and base tree
-    # On init: orphan from main with no base_tree so only onboarded-repos.txt is present.
-    # On update: build on the inventory branch's own HEAD to avoid inheriting main's files.
-    MAIN_SHA=$(curl -sS --fail-with-body \
-      -H "Authorization: Bearer ${INSTALL_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      "https://api.github.com/repos/${FORK_REPO}/git/ref/heads/main" \
-      | jq -r '.object.sha')
+    FILE_CONTENT=$(printf '%s' "$NEW_INV" | base64 | tr -d '\n')
 
     if [[ "$INITIALIZING" == "true" ]]; then
-      PARENT_SHA="$MAIN_SHA"
-      TREE_PAYLOAD="{\"tree\":[{\"path\":\"onboarded-repos.txt\",\"mode\":\"100644\",\"type\":\"blob\",\"sha\":\"${BLOB_SHA}\"}]}"
-    else
-      ENCODED_BRANCH=$(printf '%s' "$INV_BRANCH" | python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip(), safe=""))')
-      PARENT_SHA=$(curl -sS --fail-with-body \
+      # Create branch from main HEAD if it doesn't exist, otherwise reuse it.
+      # Then delete every file except onboarded-repos.txt via the Contents API
+      # (each delete is a signed commit, satisfying required_signatures).
+      # onboarded-repos.txt is written last by the Contents API call below.
+      echo "Creating inventory branch..."
+      ENCODED_INV_BRANCH=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$INV_BRANCH")
+      INV_BRANCH_EXISTS=$(curl -sS \
         -H "Authorization: Bearer ${INSTALL_TOKEN}" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        "https://api.github.com/repos/${FORK_REPO}/git/ref/heads/${ENCODED_BRANCH}" \
-        | jq -r '.object.sha')
-      if [[ -z "$PARENT_SHA" || "$PARENT_SHA" == "null" ]]; then
-        echo "Error: failed to fetch inventory branch ref (got empty/null sha)." >&2
-        exit 1
+        "https://api.github.com/repos/${FORK_REPO}/git/ref/heads/${ENCODED_INV_BRANCH}" \
+        | jq -r '.ref // empty')
+      if [[ -z "$INV_BRANCH_EXISTS" ]]; then
+        MAIN_SHA=$(curl -sS --fail-with-body \
+          -H "Authorization: Bearer ${INSTALL_TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "https://api.github.com/repos/${FORK_REPO}/git/ref/heads/main" \
+          | jq -r '.object.sha')
+        curl -sS --fail-with-body -X POST \
+          -H "Authorization: Bearer ${INSTALL_TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          -H "Content-Type: application/json" \
+          -d "{\"ref\":\"refs/heads/${INV_BRANCH}\",\"sha\":\"${MAIN_SHA}\"}" \
+          "https://api.github.com/repos/${FORK_REPO}/git/refs" > /dev/null
       fi
-      BASE_TREE=$(curl -sS --fail-with-body \
+      # Delete every file except onboarded-repos.txt (signed commit per file)
+      while IFS=$'\t' read -r fpath fsha; do
+        [[ "$fpath" == "onboarded-repos.txt" ]] && continue
+        curl -sS --fail-with-body -X DELETE \
+          -H "Authorization: Bearer ${INSTALL_TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          -H "Content-Type: application/json" \
+          -d "{\"message\":\"chore: init inventory branch\",\"sha\":\"${fsha}\",\"branch\":\"${INV_BRANCH}\"}" \
+          "https://api.github.com/repos/${FORK_REPO}/contents/$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$fpath")" > /dev/null
+      done < <(curl -sS --fail-with-body \
         -H "Authorization: Bearer ${INSTALL_TOKEN}" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        "https://api.github.com/repos/${FORK_REPO}/git/commits/${PARENT_SHA}" \
-        | jq -r '.tree.sha')
-      TREE_PAYLOAD="{\"base_tree\":\"${BASE_TREE}\",\"tree\":[{\"path\":\"onboarded-repos.txt\",\"mode\":\"100644\",\"type\":\"blob\",\"sha\":\"${BLOB_SHA}\"}]}"
-    fi
-
-    # Create tree and commit
-    echo "Creating commit..."
-    NEW_TREE=$(curl -sS --fail-with-body -X POST \
-      -H "Authorization: Bearer ${INSTALL_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      -H "Content-Type: application/json" \
-      -d "$TREE_PAYLOAD" \
-      "https://api.github.com/repos/${FORK_REPO}/git/trees" \
-      | jq -r '.sha')
-
-    if [[ -z "$NEW_TREE" || "$NEW_TREE" == "null" ]]; then
-      echo "Error: failed to create git tree (got empty/null sha)." >&2
-      exit 1
-    fi
-
-    NEW_COMMIT=$(curl -sS --fail-with-body -X POST \
-      -H "Authorization: Bearer ${INSTALL_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      -H "Content-Type: application/json" \
-      -d "{\"message\":\"chore: update onboarded-repos inventory\",\"tree\":\"${NEW_TREE}\",\"parents\":[\"${PARENT_SHA}\"]}" \
-      "https://api.github.com/repos/${FORK_REPO}/git/commits" \
-      | jq -r '.sha')
-
-    if [[ -z "$NEW_COMMIT" || "$NEW_COMMIT" == "null" ]]; then
-      echo "Error: failed to create git commit (got empty/null sha)." >&2
-      exit 1
-    fi
-
-    # Create or force-update the inventory branch
-    echo "Updating branch ref..."
-    ENCODED_BRANCH=$(printf '%s' "$INV_BRANCH" | python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip(), safe=""))')
-    BRANCH_EXISTS=$(curl -sS --fail-with-body \
-      -H "Authorization: Bearer ${INSTALL_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      "https://api.github.com/repos/${FORK_REPO}/git/ref/heads/${ENCODED_BRANCH}" \
-      | jq -r '.ref // empty' || true)
-
-    if [[ -n "$BRANCH_EXISTS" ]]; then
-      curl -sS --fail-with-body -X PATCH \
+        "https://api.github.com/repos/${FORK_REPO}/git/trees/${ENCODED_INV_BRANCH}?recursive=1" \
+        | jq -r '.tree[] | select(.type == "blob") | [.path, .sha] | @tsv')
+      # onboarded-repos.txt: create if absent, update if present (from prior init)
+      CURRENT_FILE_SHA=$(curl -sS \
         -H "Authorization: Bearer ${INSTALL_TOKEN}" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        -H "Content-Type: application/json" \
-        -d "{\"sha\":\"${NEW_COMMIT}\",\"force\":true}" \
-        "https://api.github.com/repos/${FORK_REPO}/git/refs/heads/${ENCODED_BRANCH}"
+        "https://api.github.com/repos/${FORK_REPO}/contents/onboarded-repos.txt?ref=${INV_BRANCH}" \
+        | jq -r '.sha // empty')
+      if [[ -n "$CURRENT_FILE_SHA" ]]; then
+        CONTENTS_PAYLOAD="{\"message\":\"chore: update onboarded-repos inventory\",\"content\":\"${FILE_CONTENT}\",\"sha\":\"${CURRENT_FILE_SHA}\",\"branch\":\"${INV_BRANCH}\"}"
+      else
+        CONTENTS_PAYLOAD="{\"message\":\"chore: update onboarded-repos inventory\",\"content\":\"${FILE_CONTENT}\",\"branch\":\"${INV_BRANCH}\"}"
+      fi
     else
-      curl -sS --fail-with-body -X POST \
+      # Get current file SHA for the update
+      CURRENT_FILE_SHA=$(curl -sS --fail-with-body \
         -H "Authorization: Bearer ${INSTALL_TOKEN}" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        -H "Content-Type: application/json" \
-        -d "{\"ref\":\"refs/heads/${INV_BRANCH}\",\"sha\":\"${NEW_COMMIT}\"}" \
-        "https://api.github.com/repos/${FORK_REPO}/git/refs"
+        "https://api.github.com/repos/${FORK_REPO}/contents/onboarded-repos.txt?ref=${INV_BRANCH}" \
+        | jq -r '.sha')
+      CONTENTS_PAYLOAD="{\"message\":\"chore: update onboarded-repos inventory\",\"content\":\"${FILE_CONTENT}\",\"sha\":\"${CURRENT_FILE_SHA}\",\"branch\":\"${INV_BRANCH}\"}"
     fi
+
+    # Write via Contents API — GitHub signs this commit automatically
+    echo "Creating commit..."
+    curl -sS --fail-with-body -X PUT \
+      -H "Authorization: Bearer ${INSTALL_TOKEN}" \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      -H "Content-Type: application/json" \
+      -d "$CONTENTS_PAYLOAD" \
+      "https://api.github.com/repos/${FORK_REPO}/contents/onboarded-repos.txt" > /dev/null
 
     echo "Inventory updated on branch ${INV_BRANCH}."
   else
