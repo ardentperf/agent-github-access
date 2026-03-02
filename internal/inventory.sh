@@ -94,8 +94,12 @@ echo "All installed repos have required branch protection rulesets."
 # ── Update inventory branch ───────────────────────────────────────────────────
 # Only runs inside GitHub Actions (GITHUB_TOKEN is available).
 # Writes onboarded-repos.txt to a dedicated agent branch via the Contents API
-# so the commit is signed by GitHub (required by the agent-gh-access-apps-must-sign
-# ruleset). The low-level Git Data API does not produce signed commits.
+# so the branch tip is always a signed commit (required by the
+# agent-gh-access-apps-must-sign ruleset). The low-level Git Data API does not
+# produce signed commits. On first init a minimal seed tree (only
+# onboarded-repos.txt, no other files) is bootstrapped via the Git Data API and
+# the branch is created pointing at it; the Contents API then immediately
+# overwrites the placeholder with real content, leaving a signed tip commit.
 # First line is a comment with the app ID — if it changes (app recreated),
 # the file is reset so the inventory reflects only the current app.
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
@@ -140,22 +144,52 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     FILE_CONTENT=$(printf '%s' "$NEW_INV" | base64 | tr -d '\n')
 
     if [[ "$INITIALIZING" == "true" ]]; then
-      # Create the branch first (points to main HEAD; no commit created here)
+      # Bootstrap an isolated branch containing only onboarded-repos.txt.
+      # Step 1: build a minimal tree (no base_tree) and an unsigned seed commit,
+      #         then point the new branch at it via the Refs API.  Branch creation
+      #         is not a push so the required_signatures ruleset does not fire.
+      # Step 2: write the real content via the Contents API, which produces a
+      #         signed commit on the branch tip — satisfying the ruleset.
       echo "Creating inventory branch..."
+      SEED_TREE=$(curl -sS --fail-with-body -X POST \
+        -H "Authorization: Bearer ${INSTALL_TOKEN}" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        -H "Content-Type: application/json" \
+        -d "{\"tree\":[{\"path\":\"onboarded-repos.txt\",\"mode\":\"100644\",\"type\":\"blob\",\"content\":\"\"}]}" \
+        "https://api.github.com/repos/${FORK_REPO}/git/trees" \
+        | jq -r '.sha')
+      # Find any existing commit to use as parent (main HEAD); the seed commit
+      # itself just needs to be a valid parent so the branch has history.
       MAIN_SHA=$(curl -sS --fail-with-body \
         -H "Authorization: Bearer ${INSTALL_TOKEN}" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "https://api.github.com/repos/${FORK_REPO}/git/ref/heads/main" \
         | jq -r '.object.sha')
+      SEED_COMMIT=$(curl -sS --fail-with-body -X POST \
+        -H "Authorization: Bearer ${INSTALL_TOKEN}" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        -H "Content-Type: application/json" \
+        -d "{\"message\":\"chore: init inventory branch\",\"tree\":\"${SEED_TREE}\",\"parents\":[\"${MAIN_SHA}\"]}" \
+        "https://api.github.com/repos/${FORK_REPO}/git/commits" \
+        | jq -r '.sha')
       curl -sS --fail-with-body -X POST \
         -H "Authorization: Bearer ${INSTALL_TOKEN}" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         -H "Content-Type: application/json" \
-        -d "{\"ref\":\"refs/heads/${INV_BRANCH}\",\"sha\":\"${MAIN_SHA}\"}" \
+        -d "{\"ref\":\"refs/heads/${INV_BRANCH}\",\"sha\":\"${SEED_COMMIT}\"}" \
         "https://api.github.com/repos/${FORK_REPO}/git/refs" > /dev/null
-      CONTENTS_PAYLOAD="{\"message\":\"chore: update onboarded-repos inventory\",\"content\":\"${FILE_CONTENT}\",\"branch\":\"${INV_BRANCH}\"}"
+      # Seed file sha needed by Contents API to overwrite the placeholder
+      CURRENT_FILE_SHA=$(curl -sS --fail-with-body \
+        -H "Authorization: Bearer ${INSTALL_TOKEN}" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "https://api.github.com/repos/${FORK_REPO}/contents/onboarded-repos.txt?ref=${INV_BRANCH}" \
+        | jq -r '.sha')
+      CONTENTS_PAYLOAD="{\"message\":\"chore: update onboarded-repos inventory\",\"content\":\"${FILE_CONTENT}\",\"sha\":\"${CURRENT_FILE_SHA}\",\"branch\":\"${INV_BRANCH}\"}"
     else
       # Get current file SHA for the update
       CURRENT_FILE_SHA=$(curl -sS --fail-with-body \
