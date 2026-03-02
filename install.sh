@@ -228,7 +228,7 @@ echo "Exchanging code for credentials…"
 # Note: this endpoint is intentionally unauthenticated — the short-lived code
 # is the only credential needed. Fine-grained PATs are explicitly rejected here,
 # so we use curl with no Authorization header.
-RESULT=$(curl -sf \
+RESULT=$(curl -sSf --fail-with-body \
   -X POST \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -288,7 +288,7 @@ rm -f "$TMPKEY"
 JWT="${HEADER}.${PAYLOAD}.${SIG}"
 
 # ── Fetch installation access token ──────────────────────────────────────────
-INSTALLATIONS=$(curl -sf \
+INSTALLATIONS=$(curl -sSf --fail-with-body \
   -H "Authorization: Bearer $JWT" \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -309,14 +309,14 @@ fi
 # installation, but we verify each repo has the expected rulesets and scope the
 # token to only those repos. Any repo missing the rulesets is excluded.
 
-BROAD_TOKEN=$(curl -sf -X POST \
+BROAD_TOKEN=$(curl -sSf --fail-with-body -X POST \
   -H "Authorization: Bearer $JWT" \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens" \
   | jq -r '.token')
 
-REPOS=$(curl -sf \
+REPOS=$(curl -sSf --fail-with-body \
   -H "Authorization: Bearer $BROAD_TOKEN" \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -325,7 +325,7 @@ REPOS=$(curl -sf \
 PROTECTED_IDS=$(
   printf '%s' "$REPOS" | jq -r '.repositories[] | "\(.id)\t\(.full_name)"' \
   | while IFS=$'\t' read -r repo_id full_name; do
-      count=$(curl -sf \
+      count=$(curl -sSf --fail-with-body \
         -H "Authorization: Bearer $BROAD_TOKEN" \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -350,7 +350,7 @@ if [[ "$REPO_IDS_JSON" == "[]" ]]; then
   exit 1
 fi
 
-TOKEN=$(curl -sf -X POST \
+TOKEN=$(curl -sSf --fail-with-body -X POST \
   -H "Authorization: Bearer $JWT" \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -411,9 +411,53 @@ PYEOF
 
 chmod 700 "$OUTFILE"
 
+# ── Wait for app installation, then trigger inventory ────────────────────────
+# Poll GET /app/installations (via JWT) until at least one installation exists,
+# meaning the user has installed the app on at least one repo in the browser.
+echo "Step 2 of 2: Install the app on a repository"
+echo "  In the browser, click 'Install on GitHub', then on the GitHub page:"
+echo "  1. Choose 'Only select repositories'"
+echo "  2. Select ONLY ${USERNAME}/agent-github-access"
+echo "     This repo already has the required branch protection in place."
+echo "  3. Click Install"
+echo ""
+echo "  WARNING: Do not select any other repos here."
+echo "  Other repos must be added later using ./onboard-repo.sh to set up branch protection first."
+echo ""
+echo "  If the browser didn't open: ${INSTALL_URL}"
+echo ""
+echo "Waiting…"
+APP_PEM=$(printf '%s' "$PEM_B64" | base64 -d)
+while true; do
+  NOW=$(date +%s)
+  EXP=$((NOW + 540))
+  b64url() { base64 | tr '+/' '-_' | tr -d '=\n'; }
+  JWT_HEADER=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+  JWT_PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":%d}' "$NOW" "$EXP" "$APP_ID" | b64url)
+  TMPKEY=$(mktemp "${TMPDIR:-/tmp}/gh-jwt-XXXXXX"); chmod 600 "$TMPKEY"
+  printf '%s' "$APP_PEM" > "$TMPKEY"
+  JWT_SIG=$(printf '%s.%s' "$JWT_HEADER" "$JWT_PAYLOAD" \
+    | openssl dgst -binary -sha256 -sign "$TMPKEY" | b64url)
+  rm -f "$TMPKEY"
+  INSTALL_JWT="${JWT_HEADER}.${JWT_PAYLOAD}.${JWT_SIG}"
+  INSTALL_ID=$(curl -sSf --fail-with-body \
+    -H "Authorization: Bearer ${INSTALL_JWT}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "https://api.github.com/app/installations" \
+    | jq -r '.[0].id // empty')
+  if [[ -n "$INSTALL_ID" ]]; then
+    echo "  ✓ App installation detected."
+    break
+  fi
+  sleep 5
+done
+
 # ── Store app credentials as secrets in the fork ──────────────────────────────
 # GH_APP_ID and GH_APP_PEM are stored in the fork's Actions secrets so the
 # inventory workflow can use them. Secrets require libsodium box encryption.
+# Stored after installation is confirmed so a partial/abandoned install does
+# not block re-running install.sh (which checks for GH_APP_ID to detect existing apps).
 echo "Storing app credentials in ${FORK_REPO} secrets…"
 
 python3 - "$APP_ID" "$PEM_B64" "$FORK_REPO" << 'PYEOF'
@@ -446,47 +490,6 @@ put_secret("GH_APP_PEM", pem_b64, key_id, pub_key)
 print("  ✓ GH_APP_ID and GH_APP_PEM stored in fork secrets")
 PYEOF
 
-# ── Wait for app installation, then trigger inventory ────────────────────────
-# Poll GET /app/installations (via JWT) until at least one installation exists,
-# meaning the user has installed the app on at least one repo in the browser.
-echo "Step 2 of 2: Install the app on a repository"
-echo "  In the browser, click 'Install on GitHub', then on the GitHub page:"
-echo "  1. Choose 'Only select repositories'"
-echo "  2. Select ONLY ${USERNAME}/agent-github-access"
-echo "     This repo already has the required branch protection in place."
-echo "  3. Click Install"
-echo ""
-echo "  WARNING: Do not select any other repos here."
-echo "  Other repos must be added later using ./onboard-repo.sh to set up branch protection first."
-echo ""
-echo "  If the browser didn't open: ${INSTALL_URL}"
-echo ""
-echo "Waiting…"
-APP_PEM=$(printf '%s' "$PEM_B64" | base64 -d)
-while true; do
-  NOW=$(date +%s)
-  EXP=$((NOW + 540))
-  b64url() { base64 | tr '+/' '-_' | tr -d '=\n'; }
-  JWT_HEADER=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
-  JWT_PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":%d}' "$NOW" "$EXP" "$APP_ID" | b64url)
-  TMPKEY=$(mktemp "${TMPDIR:-/tmp}/gh-jwt-XXXXXX"); chmod 600 "$TMPKEY"
-  printf '%s' "$APP_PEM" > "$TMPKEY"
-  JWT_SIG=$(printf '%s.%s' "$JWT_HEADER" "$JWT_PAYLOAD" \
-    | openssl dgst -binary -sha256 -sign "$TMPKEY" | b64url)
-  rm -f "$TMPKEY"
-  INSTALL_JWT="${JWT_HEADER}.${JWT_PAYLOAD}.${JWT_SIG}"
-  INSTALL_ID=$(curl -sf \
-    -H "Authorization: Bearer ${INSTALL_JWT}" \
-    -H "Accept: application/vnd.github+json" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    "https://api.github.com/app/installations" \
-    | jq -r '.[0].id // empty')
-  if [[ -n "$INSTALL_ID" ]]; then
-    echo "  ✓ App installation detected."
-    break
-  fi
-  sleep 5
-done
 gh workflow run inventory.yml --repo "${FORK_REPO}" 2>/dev/null \
   && echo "  ✓ Inventory workflow triggered" \
   || echo "  (inventory workflow trigger skipped — run manually if needed)"
