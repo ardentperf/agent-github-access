@@ -126,7 +126,7 @@ code{{font-size:.95em;background:rgba(128,128,128,.15);padding:.1em .35em;border
 <li>On the GitHub page, click <strong>Create GitHub App for {username}</strong></li>
 <li>You will be returned here with next steps</li>
 </ol>
-<div class="warn">&#9888; Do not change the app name on the GitHub page.<br>
+<div class="warn"><strong>Warning:</strong> Do not change the app name on the GitHub page.<br>
 The name <code>{app_name}</code> must stay exactly as shown.</div>
 <form method="post" action="https://github.com/settings/apps/new">
   <input type="hidden" name="manifest" value="{escaped}">
