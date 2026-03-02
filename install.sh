@@ -437,6 +437,10 @@ put_secret("GH_APP_PEM", pem_b64, key_id, pub_key)
 print("  ✓ GH_APP_ID and GH_APP_PEM stored in fork secrets")
 PYEOF
 
+# ── Trigger inventory workflow ────────────────────────────────────────────────
+gh workflow run inventory.yml --repo "${FORK_REPO}" 2>/dev/null \
+  && echo "  ✓ Inventory workflow triggered" \
+  || echo "  (inventory workflow trigger skipped — run manually if needed)"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
