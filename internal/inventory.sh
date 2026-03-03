@@ -93,7 +93,7 @@ echo "All installed repos have required branch protection rulesets."
 
 # ── Update inventory branch ───────────────────────────────────────────────────
 # Only runs inside GitHub Actions (GITHUB_TOKEN is available).
-# Writes onboarded-repos.txt to a dedicated agent branch via the Contents API
+# Writes the README inventory file to a dedicated agent branch via the Contents API
 # so the branch tip is always a signed commit (required by the
 # agent-gh-access-apps-must-sign ruleset). The branch must already exist —
 # install.sh initializes it using the install PAT (human-authed, no signing
@@ -109,7 +109,8 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     "https://api.github.com/installation/repositories" \
     | jq -r '.repositories[0].owner.login')
   FORK_REPO="${OWNER_LOGIN}/agent-github-access"
-  INV_BRANCH="x-ai/${OWNER_LOGIN}/inventory---internal-do-not-delete"
+  INV_BRANCH="x-ai/${OWNER_LOGIN}/__inventory__do-not-delete"
+  DESCRIPTION_LINE="# List of repositories onboarded to agent-github-access"
   HEADER_LINE="# app-id:${GH_APP_ID}"
 
   # Fetch current inventory — branch must exist (initialized by install.sh)
@@ -118,7 +119,7 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     -H "Authorization: Bearer ${INSTALL_TOKEN}" \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
-    "https://api.github.com/repos/${FORK_REPO}/contents/onboarded-repos.txt?ref=${INV_BRANCH}" \
+    "https://api.github.com/repos/${FORK_REPO}/contents/README?ref=${INV_BRANCH}" \
     2>/dev/null || true)
   CURRENT_FILE_SHA=$(printf '%s' "$INV_FETCH_RESPONSE" | jq -r '.sha // empty')
   CURRENT_INV=$(printf '%s' "$INV_FETCH_RESPONSE" | jq -r '.content // empty' | base64 -d 2>/dev/null || true)
@@ -133,8 +134,8 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
   [[ -n "$CURRENT_INV" && "${CURRENT_INV: -1}" != $'\n' ]] && CURRENT_INV="${CURRENT_INV}"$'\n'
 
   # Reset if app ID changed; otherwise accumulate
-  if [[ "$(printf '%s' "$CURRENT_INV" | head -1)" != "$HEADER_LINE" ]]; then
-    NEW_INV="${HEADER_LINE}"$'\n'
+  if [[ "$(printf '%s' "$CURRENT_INV" | sed -n '2p')" != "$HEADER_LINE" ]]; then
+    NEW_INV="${DESCRIPTION_LINE}"$'\n'"${HEADER_LINE}"$'\n'
   else
     NEW_INV="$CURRENT_INV"
   fi
@@ -159,7 +160,7 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
       -H "X-GitHub-Api-Version: 2022-11-28" \
       -H "Content-Type: application/json" \
       -d "$CONTENTS_PAYLOAD" \
-      "https://api.github.com/repos/${FORK_REPO}/contents/onboarded-repos.txt" > /dev/null
+      "https://api.github.com/repos/${FORK_REPO}/contents/README" > /dev/null
 
     echo "Inventory updated on branch ${INV_BRANCH}."
   else

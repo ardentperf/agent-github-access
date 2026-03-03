@@ -3,7 +3,7 @@
 # been deleted. Run this after deleting the app in the GitHub UI.
 #
 # What it does:
-#   1. Fetches the inventory from the x-ai/<owner>/inventory---internal-do-not-delete branch
+#   1. Fetches the inventory from the x-ai/<owner>/__inventory__do-not-delete branch
 #   2. Verifies the GitHub App no longer exists (polls until confirmed)
 #   3. Deletes GH_APP_ID and GH_APP_PEM secrets from the agent-github-access fork
 #   4. Generates uninstall-rulesets.sh (run it separately with the onboard PAT)
@@ -15,12 +15,12 @@ set -euo pipefail
 
 OWNER_LOGIN=$(gh api user --jq '.login')
 FORK_REPO="${OWNER_LOGIN}/agent-github-access"
-INV_BRANCH="x-ai/${OWNER_LOGIN}/inventory---internal-do-not-delete"
+INV_BRANCH="x-ai/${OWNER_LOGIN}/__inventory__do-not-delete"
 
 # ── Fetch latest inventory from inventory branch ──────────────────────────────
 echo "Fetching latest inventory from ${FORK_REPO} (branch: ${INV_BRANCH})…"
 INVENTORY_CONTENT=$(gh api \
-  "/repos/${FORK_REPO}/contents/onboarded-repos.txt?ref=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${INV_BRANCH}', safe=''))")" \
+  "/repos/${FORK_REPO}/contents/README?ref=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${INV_BRANCH}', safe=''))")" \
   --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || true)
 
 if [[ -z "$INVENTORY_CONTENT" ]]; then
@@ -32,7 +32,7 @@ echo "  ✓ Inventory fetched."
 echo ""
 
 # ── Read app ID and derive slug ───────────────────────────────────────────────
-HEADER=$(printf '%s' "$INVENTORY_CONTENT" | head -1)
+HEADER=$(printf '%s' "$INVENTORY_CONTENT" | sed -n '2p')
 if [[ "$HEADER" != "# app-id:"* ]]; then
   echo "Error: inventory has unexpected format (first line: ${HEADER})" >&2
   exit 1

@@ -123,17 +123,18 @@ echo ""
 # It cannot be created from within Actions because the required_signatures
 # ruleset blocks unsigned Git Data API commits. The install PAT is human-authed
 # so the signing ruleset does not apply to its pushes.
-# Creates a minimal tree with only onboarded-repos.txt (no base_tree) so the
+# Creates a minimal tree with only a README file (no base_tree) so the
 # branch contains exactly one file. Skip if the branch already exists.
-INV_BRANCH="x-ai/${USERNAME}/inventory---internal-do-not-delete"
+INV_BRANCH="x-ai/${USERNAME}/__inventory__do-not-delete"
 echo "Checking inventory branch (${INV_BRANCH})…"
 ENCODED_INV_BRANCH=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$INV_BRANCH")
 if gh api "/repos/${FORK_REPO}/git/ref/heads/${ENCODED_INV_BRANCH}" --silent 2>/dev/null; then
   echo "  ✓ Inventory branch already exists — skipping init."
 else
   echo "  Initializing inventory branch…"
+  DESCRIPTION_LINE="# List of repositories onboarded to agent-github-access"
   HEADER_LINE="# app-id:placeholder"
-  INIT_CONTENT=$(printf '%s\n' "$HEADER_LINE" | base64 | tr -d '\n')
+  INIT_CONTENT=$(printf '%s\n%s\n' "$DESCRIPTION_LINE" "$HEADER_LINE" | base64 | tr -d '\n')
   # Create blob
   BLOB_SHA=$(gh api \
     --method POST \
@@ -143,14 +144,14 @@ else
     --field "content=${INIT_CONTENT}" \
     --field encoding=base64 \
     --jq '.sha')
-  # Create tree with only onboarded-repos.txt
+  # Create tree with only README file
   TREE_SHA=$(gh api \
     --method POST \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
     "/repos/${FORK_REPO}/git/trees" \
     --input - << TREEEOF | jq -r '.sha'
-{"tree":[{"path":"onboarded-repos.txt","mode":"100644","type":"blob","sha":"${BLOB_SHA}"}]}
+{"tree":[{"path":"README","mode":"100644","type":"blob","sha":"${BLOB_SHA}"}]}
 TREEEOF
 )
   # Create commit (no parent — orphan commit; human PAT so signing ruleset doesn't apply)

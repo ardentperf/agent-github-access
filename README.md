@@ -33,7 +33,7 @@ on all repositories"])
 
     subgraph fork["agent-github-access fork — GitHub (your account)"]
         SEC["🔒 Secrets: GH_APP_ID, GH_APP_PEM"]
-        INV["📄 inventory---internal-do-not-delete branch"]
+        INV["📄 __inventory__do-not-delete branch"]
         AU(["Inventory workflow
 scheduled daily + on each onboard"])
         AU --> AUC{"All installed repos
@@ -236,7 +236,7 @@ echo '<your-install-pat>' | gh auth login --hostname github.com --with-token
 ./uninstall.sh
 ```
 
-The script fetches the inventory from the `x-ai/<owner>/inventory---internal-do-not-delete` branch and will prompt you to delete the app if it detects it still exists before proceeding.
+The script fetches the inventory from the `x-ai/<owner>/__inventory__do-not-delete` branch and will prompt you to delete the app if it detects it still exists before proceeding.
 
 3. **Run `uninstall-rulesets.sh`** with the **onboard PAT** — removes the two `agent-gh-access-*` rulesets from every repo in the inventory:
 

@@ -684,14 +684,14 @@ elif [[ "\$args" == *"/installation/repositories"* ]]; then
   printf '{"repositories":[{"full_name":"${TEST_OWNER}/repo1","owner":{"login":"${TEST_OWNER}"}},{"full_name":"${TEST_OWNER}/repo2","owner":{"login":"${TEST_OWNER}"}}]}'
 elif [[ "\$args" == *"/rulesets"* ]]; then
   printf '[{"name":"agent-gh-access-apps-blocked-from-non-ai-branches"},{"name":"agent-gh-access-apps-must-sign"}]'
-elif [[ "\$args" == *"contents/onboarded-repos.txt"* && "\$args" != *"-X PUT"* ]]; then
+elif [[ "\$args" == *"contents/README"* && "\$args" != *"-X PUT"* ]]; then
   # Inventory fetch: return existing content with SHA, or empty (file not found)
   if [[ -n "${existing_b64}" ]]; then
     printf '{"content":"%s","sha":"${existing_sha}"}' "${existing_b64}"
   else
     printf '{}'
   fi
-elif [[ "\$args" == *"-X PUT"* && "\$args" == *"contents/onboarded-repos.txt"* ]]; then
+elif [[ "\$args" == *"-X PUT"* && "\$args" == *"contents/README"* ]]; then
   # Contents API write — capture the -d payload for inspection
   for i in "\$@"; do
     if [[ "\$i" == "{"* ]]; then
@@ -734,7 +734,7 @@ printf '%s' "$RUN1_OUTPUT" | grep -qi "install.sh" \
   || fail "inventory no-branch: error mentions install.sh"
 
 # Seed INV_CONTENT1 with what the first successful run would write (simulating install.sh init)
-INV_CONTENT1="# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'"${TEST_OWNER}/repo2"$'\n'
+INV_CONTENT1="# List of repositories onboarded to agent-github-access"$'\n'"# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'"${TEST_OWNER}/repo2"$'\n'
 
 # ── Run 2: existing inventory returned — no duplicates ────────────────────────
 rm -f "$INV_CONTENTS_LOG"
@@ -785,7 +785,7 @@ printf '%s' "$INV_CONTENT3" | grep -q "app-id:${TEST_APP_ID}" \
 
 # ── Run 4: update from partial inventory — Contents API payload is correct ─────
 # Use partial content with only repo1 so repo2 triggers an update.
-INV_CONTENT_RUN4="# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'
+INV_CONTENT_RUN4="# List of repositories onboarded to agent-github-access"$'\n'"# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'
 rm -f "$INV_CONTENTS_LOG"
 INV_CURL4="$TMPDIR_T/inv-curl-run4"
 write_inv_curl "$INV_CURL4" "$INV_CONTENT_RUN4" "branch-exists"
@@ -806,7 +806,7 @@ printf '%s' "$INV_CONTENT4" | grep -qx "${TEST_OWNER}/repo1" \
 
 # ── Run 5: update — Contents API used, new repo appears in uploaded content ───
 # Seed inventory with only repo1 so repo2 is new and triggers an update.
-INV_CONTENT_PARTIAL="# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'
+INV_CONTENT_PARTIAL="# List of repositories onboarded to agent-github-access"$'\n'"# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'
 rm -f "$INV_CONTENTS_LOG"
 INV_CURL5="$TMPDIR_T/inv-curl-run5"
 write_inv_curl "$INV_CURL5" "$INV_CONTENT_PARTIAL" "branch-exists"
@@ -862,10 +862,10 @@ if [[ "\$args" == *"user"* && "\$args" == *".login"* ]]; then
   printf '%s' "${TEST_OWNER}"
   exit 0
 fi
-if [[ "\$args" == *"contents/onboarded-repos.txt"* && "\$args" == *"inventory---internal-do-not-delete"* ]]; then
+if [[ "\$args" == *"contents/README"* && "\$args" == *"__inventory__do-not-delete"* ]]; then
   if [[ "${inv_state}" == "has-inventory" ]]; then
     # uninstall.sh uses --jq '.content', so output just the base64 content directly
-    printf '# app-id:%s\n%s/repo1\n%s/repo2\n' "${TEST_APP_ID}" "${TEST_OWNER}" "${TEST_OWNER}" | base64 | tr -d '\n'
+    printf '# List of repositories onboarded to agent-github-access\n# app-id:%s\n%s/repo1\n%s/repo2\n' "${TEST_APP_ID}" "${TEST_OWNER}" "${TEST_OWNER}" | base64 | tr -d '\n'
     exit 0
   else
     exit 1
