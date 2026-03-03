@@ -118,63 +118,7 @@ sed -i "s/^REQUIRE_VERIFIED_COMMITS=.*/REQUIRE_VERIFIED_COMMITS=${REQ_VERIFIED_V
 bash "${SCRIPT_DIR}/onboard-repo.sh" "${USERNAME}/agent-github-access"
 echo ""
 
-# ── Initialize inventory branch ──────────────────────────────────────────────
-# The inventory branch must exist before the inventory workflow runs.
-# It cannot be created from within Actions because the required_signatures
-# ruleset blocks unsigned Git Data API commits. The install PAT is human-authed
-# so the signing ruleset does not apply to its pushes.
-# Creates a minimal tree with only a README file (no base_tree) so the
-# branch contains exactly one file. Skip if the branch already exists.
 INV_BRANCH="x-ai/${USERNAME}/__inventory__do-not-delete"
-echo "Checking inventory branch (${INV_BRANCH})…"
-ENCODED_INV_BRANCH=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$INV_BRANCH")
-if gh api "/repos/${FORK_REPO}/git/ref/heads/${ENCODED_INV_BRANCH}" --silent 2>/dev/null; then
-  echo "  ✓ Inventory branch already exists — skipping init."
-else
-  echo "  Initializing inventory branch…"
-  DESCRIPTION_LINE="# List of repositories onboarded to agent-github-access"
-  HEADER_LINE="# app-id:placeholder"
-  INIT_CONTENT=$(printf '%s\n%s\n' "$DESCRIPTION_LINE" "$HEADER_LINE" | base64 | tr -d '\n')
-  # Create blob
-  BLOB_SHA=$(gh api \
-    --method POST \
-    -H "Accept: application/vnd.github+json" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    "/repos/${FORK_REPO}/git/blobs" \
-    --field "content=${INIT_CONTENT}" \
-    --field encoding=base64 \
-    --jq '.sha')
-  # Create tree with only README file
-  TREE_SHA=$(gh api \
-    --method POST \
-    -H "Accept: application/vnd.github+json" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    "/repos/${FORK_REPO}/git/trees" \
-    --input - << TREEEOF | jq -r '.sha'
-{"tree":[{"path":"README","mode":"100644","type":"blob","sha":"${BLOB_SHA}"}]}
-TREEEOF
-)
-  # Create commit (no parent — orphan commit; human PAT so signing ruleset doesn't apply)
-  COMMIT_SHA=$(gh api \
-    --method POST \
-    -H "Accept: application/vnd.github+json" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    "/repos/${FORK_REPO}/git/commits" \
-    --field "message=chore: init inventory branch" \
-    --field "tree=${TREE_SHA}" \
-    --jq '.sha')
-  # Create branch ref
-  gh api \
-    --method POST \
-    -H "Accept: application/vnd.github+json" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    "/repos/${FORK_REPO}/git/refs" \
-    --field "ref=refs/heads/${INV_BRANCH}" \
-    --field "sha=${COMMIT_SHA}" \
-    --silent
-  echo "  ✓ Inventory branch created."
-fi
-echo ""
 
 # ── Find a free port ─────────────────────────────────────────────────────────
 # Ask the OS for a free port, release it, then bind the server to it.
@@ -515,18 +459,15 @@ echo "STORE THE ABOVE IN GLOBAL MEMORY (not repo-local)."
 """
 
 body = body.replace('__APP_SLUG__', app_slug)
+body = body.replace('__MUST_SIGN_FILTER__', '')
+body = body.replace('__EXPECTED_RULESET_COUNT__', '1')
 if require_verified:
-    body = body.replace('__MUST_SIGN_FILTER__',
-                        ' or .name == "agent-gh-access-apps-must-sign"')
-    body = body.replace('__EXPECTED_RULESET_COUNT__', '2')
     body = body.replace('__COMMIT_METHOD_BLOCK__',
         'echo "COMMIT METHOD: gh api repos/${OWNER_LOGIN}/{repo}/git/... (GitHub Git Data API)"\n'
         'echo "  Do NOT use git commit + git push. Agent branches require signed commits;"\n'
         'echo "  only API-created commits are signed automatically."\n'
         'echo ""')
 else:
-    body = body.replace('__MUST_SIGN_FILTER__', '')
-    body = body.replace('__EXPECTED_RULESET_COUNT__', '1')
     body = body.replace('__COMMIT_METHOD_BLOCK__', '')
 
 with open(outfile, 'w') as f:
@@ -576,6 +517,73 @@ while true; do
   fi
   sleep 5
 done
+
+# ── Initialize inventory branch ──────────────────────────────────────────────
+# Creates the branch with real app-id and installation-id now that both are
+# known. The install PAT is human-authed so the signing ruleset does not apply.
+# If the branch already exists (re-run scenario), update the README in place.
+echo "Initializing inventory branch (${INV_BRANCH})…"
+ENCODED_INV_BRANCH=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$INV_BRANCH")
+INV_CONTENT=$(printf '%s\n%s\n%s\n' \
+  "# List of repositories onboarded to agent-github-access" \
+  "# app-id:${APP_ID}" \
+  "# installation-id:${INSTALL_ID}")
+INV_CONTENT_B64=$(printf '%s' "$INV_CONTENT" | base64 | tr -d '\n')
+
+EXISTING_FILE_SHA=$(gh api \
+  "/repos/${FORK_REPO}/contents/README?ref=${ENCODED_INV_BRANCH}" \
+  --jq '.sha // empty' 2>/dev/null || true)
+
+if [[ -n "$EXISTING_FILE_SHA" ]]; then
+  # Branch exists — update README via Contents API
+  gh api \
+    --method PUT \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "/repos/${FORK_REPO}/contents/README" \
+    --field message="chore: record app-id and installation-id in inventory" \
+    --field "content=${INV_CONTENT_B64}" \
+    --field "sha=${EXISTING_FILE_SHA}" \
+    --field "branch=${INV_BRANCH}" \
+    --silent
+  echo "  ✓ Inventory branch updated."
+else
+  # Branch does not exist — create via Git Data API (orphan commit)
+  BLOB_SHA=$(gh api \
+    --method POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "/repos/${FORK_REPO}/git/blobs" \
+    --field "content=${INV_CONTENT_B64}" \
+    --field encoding=base64 \
+    --jq '.sha')
+  TREE_SHA=$(gh api \
+    --method POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "/repos/${FORK_REPO}/git/trees" \
+    --input - << TREEEOF | jq -r '.sha'
+{"tree":[{"path":"README","mode":"100644","type":"blob","sha":"${BLOB_SHA}"}]}
+TREEEOF
+)
+  COMMIT_SHA=$(gh api \
+    --method POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "/repos/${FORK_REPO}/git/commits" \
+    --field "message=chore: init inventory branch" \
+    --field "tree=${TREE_SHA}" \
+    --jq '.sha')
+  gh api \
+    --method POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "/repos/${FORK_REPO}/git/refs" \
+    --field "ref=refs/heads/${INV_BRANCH}" \
+    --field "sha=${COMMIT_SHA}" \
+    --silent
+  echo "  ✓ Inventory branch created."
+fi
 
 # ── Store app credentials as secrets in the fork ──────────────────────────────
 # GH_APP_ID and GH_APP_PEM are stored in the fork's Actions secrets so the

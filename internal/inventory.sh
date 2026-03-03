@@ -133,9 +133,13 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
   # Normalize: ensure CURRENT_INV ends with a newline (base64 -d strips it)
   [[ -n "$CURRENT_INV" && "${CURRENT_INV: -1}" != $'\n' ]] && CURRENT_INV="${CURRENT_INV}"$'\n'
 
+  # Preserve installation-id header line across updates
+  INSTALL_ID_LINE=$(printf '%s' "$CURRENT_INV" | grep '^# installation-id:' || true)
+
   # Reset if app ID changed; otherwise accumulate
   if [[ "$(printf '%s' "$CURRENT_INV" | sed -n '2p')" != "$HEADER_LINE" ]]; then
     NEW_INV="${DESCRIPTION_LINE}"$'\n'"${HEADER_LINE}"$'\n'
+    [[ -n "$INSTALL_ID_LINE" ]] && NEW_INV="${NEW_INV}${INSTALL_ID_LINE}"$'\n'
   else
     NEW_INV="$CURRENT_INV"
   fi
