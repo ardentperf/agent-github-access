@@ -2,6 +2,8 @@
 [![E2E Tests](https://github.com/ardentperf/agent-github-access/actions/workflows/e2e.yml/badge.svg)](https://github.com/ardentperf/agent-github-access/actions/workflows/e2e.yml)
 [![App Access Inventory](https://github.com/ardentperf/agent-github-access/actions/workflows/inventory.yml/badge.svg)](https://github.com/ardentperf/agent-github-access/actions/workflows/inventory.yml)
 
+📋 [Onboarded repositories inventory](https://github.com/ardentperf/agent-github-access/tree/x-ai/ardentperf/__inventory__do-not-delete)
+
 # Agent GitHub Access
 
 > **Personal GitHub accounts only.** This project is designed for individual users on free GitHub accounts. It is not intended for GitHub Organizations or Enterprise accounts and has not been tested with them.
