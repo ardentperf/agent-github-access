@@ -285,6 +285,8 @@ You can pre-populate the global file before the first session: run `~/authentica
 
 ### Global instruction file paths by tool
 
+> **Disclaimer:** Only the Claude Code entry below has been directly verified. All other entries are based on AI research and may be outdated or incorrect. PRs welcome from anyone who has verified how a tool works firsthand.
+
 | Tool | Global instructions file | Notes |
 |---|---|---|
 | **Claude Code** | `~/.claude/CLAUDE.md` | Also auto-saves runtime memory to `~/.claude/projects/*/memory/MEMORY.md` |
