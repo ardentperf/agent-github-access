@@ -9,6 +9,9 @@
 #   on all repositories — no Secrets or Contents needed).
 set -euo pipefail
 
+# Set by install.sh via sed; change here to override for manual runs.
+REQUIRE_VERIFIED_COMMITS=1
+
 if [[ $# -ne 1 ]]; then
   echo "Usage: $0 <repo> or $0 <owner/repo>" >&2
   exit 1
@@ -132,13 +135,15 @@ echo "  ✓ Ruleset: agent blocked from all branches except ${AGENT_BRANCH_PREFI
 # ── Ruleset: require signed commits on agent branches ────────────────────────
 # All commits to x-ai/<owner>/** must be signed and verified by GitHub.
 # The GitHub App signs commits server-side so agent commits pass automatically.
-gh api \
-  --method POST \
-  -H "Accept: application/vnd.github+json" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  "/repos/${TARGET_REPO}/rulesets" \
-  --silent \
-  --input - << EOF
+# Controlled by REQUIRE_VERIFIED_COMMITS env var (default: 1 = require).
+if [[ "$REQUIRE_VERIFIED_COMMITS" == "1" ]]; then
+  gh api \
+    --method POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "/repos/${TARGET_REPO}/rulesets" \
+    --silent \
+    --input - << EOF
 {
   "name": "agent-gh-access-apps-must-sign",
   "target": "branch",
@@ -156,7 +161,10 @@ gh api \
 }
 EOF
 
-echo "  ✓ Ruleset: agent commits must be signed on ${AGENT_BRANCH_PREFIX}/**"
+  echo "  ✓ Ruleset: agent commits must be signed on ${AGENT_BRANCH_PREFIX}/**"
+else
+  echo "  – Skipped verified-commits ruleset (REQUIRE_VERIFIED_COMMITS=0)"
+fi
 
 # ── Trigger inventory workflow (only if app credentials are already stored) ───
 # During initial install, install.sh calls this script before the app exists.

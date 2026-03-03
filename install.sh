@@ -84,11 +84,37 @@ while true; do
   esac
 done
 
+# ── Verified-commits prompt ───────────────────────────────────────────────────
+# When required, agents must use the Git Data API (which signs commits server-
+# side automatically) rather than plain git commit/push. authenticate-github.sh
+# instructs the agent to use the Data API and checks that the must-sign ruleset
+# exists. Both are omitted if the user opts out here.
+echo "The branch ruleset for agent branches can require all commits to be"
+echo "verified (signed and checked) by GitHub. This prevents the agent from"
+echo "pushing commits under a default git identity or any identity other than"
+echo "its own app — guaranteeing clear identification of agent work."
+echo ""
+echo "  TRADEOFF: The agent must use the GitHub API for all commits and"
+echo "  manually keep any local checkouts in sync (no plain git commit/push)."
+echo "  In practice agents have handled this overhead without issues."
+echo "  Requiring verified commits is recommended."
+echo ""
+while true; do
+  read -r -p "Require verified commits on agent branches? [Y/n]: " REQ_VERIFIED
+  case "$REQ_VERIFIED" in
+    y|Y|"") REQ_VERIFIED_VAL=1; echo ""; break ;;
+    n|N)    REQ_VERIFIED_VAL=0; echo ""; break ;;
+    *) echo "Please answer y or n." ;;
+  esac
+done
+
 # ── Onboard the fork before the app is created ───────────────────────────────
 # Sets up branch protection rulesets on the fork so they are in place the
 # moment the app is installed. Safe to re-run — onboard-repo.sh is idempotent.
 echo "Setting up branch protection on ${USERNAME}/agent-github-access…"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+sed -i "s/^REQUIRE_VERIFIED_COMMITS=.*/REQUIRE_VERIFIED_COMMITS=${REQ_VERIFIED_VAL}/" \
+  "${SCRIPT_DIR}/onboard-repo.sh"
 bash "${SCRIPT_DIR}/onboard-repo.sh" "${USERNAME}/agent-github-access"
 echo ""
 
@@ -329,9 +355,10 @@ PEM_B64=$( printf '%s' "$PEM" | base64 | tr -d '\n')
 # ── Generate authenticate-github.sh ──────────────────────────────────────────
 OUTFILE="authenticate-github.sh"
 
-python3 - "$APP_ID" "$PEM_B64" "$APP_SLUG" "$USERNAME" "$OUTFILE" << 'PYEOF'
+python3 - "$APP_ID" "$PEM_B64" "$APP_SLUG" "$USERNAME" "$OUTFILE" "$REQ_VERIFIED_VAL" << 'PYEOF'
 import sys
-app_id, pem_b64, app_slug, owner_login, outfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+app_id, pem_b64, app_slug, owner_login, outfile, require_verified = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
+require_verified = require_verified == "1"
 
 header = (
     '#!/usr/bin/env bash\n'
@@ -417,9 +444,9 @@ PROTECTED_IDS=$(
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "https://api.github.com/repos/${full_name}/rulesets" \
-        | jq '[.[] | select(.name == "agent-gh-access-apps-blocked-from-non-ai-branches" or .name == "agent-gh-access-apps-must-sign")] | length' \
+        | jq '[.[] | select(.name == "agent-gh-access-apps-blocked-from-non-ai-branches"__MUST_SIGN_FILTER__)] | length' \
         || echo "0")
-      if [[ "${count:-0}" -eq 2 ]]; then
+      if [[ "${count:-0}" -eq __EXPECTED_RULESET_COUNT__ ]]; then
         printf '%s\n' "$repo_id"
       else
         printf 'Warning: %s is missing branch protection rulesets — excluded.\n' \
@@ -461,8 +488,7 @@ fi
 
 # ── Configure git identity as the app bot ────────────────────────────────────
 # Commits authored with this identity are displayed as ${OWNER_LOGIN}-agent[bot]
-# in the GitHub UI. The agent-gh-access-apps-must-sign ruleset requires signed
-# commits on agent branches; the GitHub App signs commits server-side.
+# in the GitHub UI.
 git config --global user.name "${OWNER_LOGIN}-agent[bot]"
 git config --global user.email "${APP_ID}+${OWNER_LOGIN}-agent[bot]@users.noreply.github.com"
 
@@ -477,10 +503,7 @@ echo "BRANCH PREFIX: x-ai/${OWNER_LOGIN}/"
 echo "  e.g. x-ai/${OWNER_LOGIN}/fix-deploy-workflow"
 echo "  GitHub rejects pushes to any other prefix. Never push to main."
 echo ""
-echo "COMMIT METHOD: gh api repos/${OWNER_LOGIN}/{repo}/git/... (GitHub Git Data API)"
-echo "  Do NOT use git commit + git push. Agent branches require signed commits;"
-echo "  only API-created commits are signed automatically."
-echo ""
+__COMMIT_METHOD_BLOCK__
 echo "RE-RUN ${SCRIPT_PATH} before retrying if you see:"
 echo "  remote: Invalid username or password."
 echo "  fatal: Authentication failed for 'https://github.com/'"
@@ -491,6 +514,19 @@ echo "STORE THE ABOVE IN GLOBAL MEMORY (not repo-local)."
 """
 
 body = body.replace('__APP_SLUG__', app_slug)
+if require_verified:
+    body = body.replace('__MUST_SIGN_FILTER__',
+                        ' or .name == "agent-gh-access-apps-must-sign"')
+    body = body.replace('__EXPECTED_RULESET_COUNT__', '2')
+    body = body.replace('__COMMIT_METHOD_BLOCK__',
+        'echo "COMMIT METHOD: gh api repos/${OWNER_LOGIN}/{repo}/git/... (GitHub Git Data API)"\n'
+        'echo "  Do NOT use git commit + git push. Agent branches require signed commits;"\n'
+        'echo "  only API-created commits are signed automatically."\n'
+        'echo ""')
+else:
+    body = body.replace('__MUST_SIGN_FILTER__', '')
+    body = body.replace('__EXPECTED_RULESET_COUNT__', '1')
+    body = body.replace('__COMMIT_METHOD_BLOCK__', '')
 
 with open(outfile, 'w') as f:
     f.write(header + body)
