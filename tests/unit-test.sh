@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test.sh — offline tests for agent-github-access scripts
+# test.sh — offline tests for stewart-copeland-ai-police scripts
 #
 # Runs install.sh for real (with mocked gh and browser) to generate
 # authenticate-github.sh, then tests its behaviour and onboard-repo.sh with
@@ -797,7 +797,7 @@ printf '%s' "$RUN1_OUTPUT" | grep -qi "install.sh" \
   || fail "inventory no-branch: error mentions install.sh"
 
 # Seed INV_CONTENT1 with what the first successful run would write (simulating install.sh init)
-INV_CONTENT1="# List of repositories onboarded to agent-github-access"$'\n'"# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'"${TEST_OWNER}/repo2"$'\n'
+INV_CONTENT1="# List of repositories onboarded to stewart-copeland-ai-police"$'\n'"# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'"${TEST_OWNER}/repo2"$'\n'
 
 # ── Run 2: existing inventory returned — no duplicates ────────────────────────
 rm -f "$INV_CONTENTS_LOG"
@@ -823,7 +823,7 @@ fi
 
 # ── Run 3: update from partial inventory — Contents API payload is correct ─────
 # Use partial content with only repo1 so repo2 triggers an update.
-INV_CONTENT_RUN3="# List of repositories onboarded to agent-github-access"$'\n'"# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'
+INV_CONTENT_RUN3="# List of repositories onboarded to stewart-copeland-ai-police"$'\n'"# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'
 rm -f "$INV_CONTENTS_LOG"
 INV_CURL3="$TMPDIR_T/inv-curl-run3"
 write_inv_curl "$INV_CURL3" "$INV_CONTENT_RUN3" "branch-exists"
@@ -844,7 +844,7 @@ printf '%s' "$INV_CONTENT3" | grep -qx "${TEST_OWNER}/repo1" \
 
 # ── Run 4: update — Contents API used, new repo appears in uploaded content ───
 # Seed inventory with only repo1 so repo2 is new and triggers an update.
-INV_CONTENT_PARTIAL="# List of repositories onboarded to agent-github-access"$'\n'"# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'
+INV_CONTENT_PARTIAL="# List of repositories onboarded to stewart-copeland-ai-police"$'\n'"# app-id:${TEST_APP_ID}"$'\n'"${TEST_OWNER}/repo1"$'\n'
 rm -f "$INV_CONTENTS_LOG"
 INV_CURL4="$TMPDIR_T/inv-curl-run4"
 write_inv_curl "$INV_CURL4" "$INV_CONTENT_PARTIAL" "branch-exists"
@@ -888,7 +888,7 @@ fi
 if [[ "\$args" == *"contents/README"* && "\$args" == *"__inventory__do-not-delete"* ]]; then
   if [[ "${inv_state}" == "has-inventory" ]]; then
     # uninstall.sh uses --jq '.content', so output just the base64 content directly
-    printf '# List of repositories onboarded to agent-github-access\n# app-id:%s\n%s/repo1\n%s/repo2\n' "${TEST_APP_ID}" "${TEST_OWNER}" "${TEST_OWNER}" | base64 | tr -d '\n'
+    printf '# List of repositories onboarded to stewart-copeland-ai-police\n# app-id:%s\n%s/repo1\n%s/repo2\n' "${TEST_APP_ID}" "${TEST_OWNER}" "${TEST_OWNER}" | base64 | tr -d '\n'
     exit 0
   else
     exit 1

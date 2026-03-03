@@ -108,7 +108,7 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     -H "X-GitHub-Api-Version: 2022-11-28" \
     "https://api.github.com/installation/repositories" \
     | jq -r '.repositories[0].owner.login')
-  FORK_REPO="${OWNER_LOGIN}/agent-github-access"
+  FORK_REPO="${OWNER_LOGIN}/stewart-copeland-ai-police"
   INV_BRANCH="x-ai/${OWNER_LOGIN}/__inventory__do-not-delete"
   # Fetch current inventory — branch must exist (initialized by install.sh)
   echo "Fetching current inventory..."

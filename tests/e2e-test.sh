@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e-test.sh — confirms real GitHub branch permissions on the agent-github-access repo.
+# e2e-test.sh — confirms real GitHub branch permissions on the stewart-copeland-ai-police repo.
 #
 # Tests branch-level push restrictions and commit identity enforcement:
 #
@@ -27,7 +27,7 @@
 #   GH_APP_ID=... GH_APP_PEM_B64=... bash tests/e2e-test.sh
 set -uo pipefail
 
-REPO="ardentperf/agent-github-access"
+REPO="ardentperf/stewart-copeland-ai-police"
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 

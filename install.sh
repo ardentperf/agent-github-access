@@ -2,7 +2,7 @@
 # install.sh — creates the GitHub App and generates authenticate-github.sh.
 #
 # Requires: gh CLI authenticated with the install PAT (Administration read/write,
-#   Secrets read/write, Contents read/write on agent-github-access fork only).
+#   Secrets read/write, Contents read/write on stewart-copeland-ai-police fork only).
 set -euo pipefail
 
 
@@ -44,7 +44,7 @@ echo "App name:         ${APP_NAME}"
 echo ""
 
 # ── Check for existing app credentials ───────────────────────────────────────
-FORK_REPO="${USERNAME}/agent-github-access"
+FORK_REPO="${USERNAME}/stewart-copeland-ai-police"
 if gh api "/repos/${FORK_REPO}/actions/secrets/GH_APP_ID" --silent 2>/dev/null; then
   echo "Error: a GitHub App has already been created for this account." >&2
   echo "  See the 'Uninstalling / full cleanup' section in README.md for instructions." >&2
@@ -111,11 +111,11 @@ done
 # ── Onboard the fork before the app is created ───────────────────────────────
 # Sets up branch protection rulesets on the fork so they are in place the
 # moment the app is installed. Safe to re-run — onboard-repo.sh is idempotent.
-echo "Setting up branch protection on ${USERNAME}/agent-github-access…"
+echo "Setting up branch protection on ${USERNAME}/stewart-copeland-ai-police…"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 sed -i "s/^REQUIRE_VERIFIED_COMMITS=.*/REQUIRE_VERIFIED_COMMITS=${REQ_VERIFIED_VAL}/" \
   "${SCRIPT_DIR}/onboard-repo.sh"
-bash "${SCRIPT_DIR}/onboard-repo.sh" "${USERNAME}/agent-github-access"
+bash "${SCRIPT_DIR}/onboard-repo.sh" "${USERNAME}/stewart-copeland-ai-police"
 echo ""
 
 INV_BRANCH="x-ai/${USERNAME}/__inventory__do-not-delete"
@@ -199,7 +199,7 @@ PYEOF
 # which it already is, so the install URL is predictable before app creation.
 INSTALL_URL="https://github.com/apps/${APP_NAME}/installations/new"
 
-python3 - "$CODEFILE" "$PORT" "$TMPHTML" "$INSTALL_URL" "${USERNAME}/agent-github-access" <<'PYEOF' &
+python3 - "$CODEFILE" "$PORT" "$TMPHTML" "$INSTALL_URL" "${USERNAME}/stewart-copeland-ai-police" <<'PYEOF' &
 import sys, http.server, urllib.parse, os
 codefile, port, htmlfile, install_url, fork_repo = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
 
@@ -482,7 +482,7 @@ chmod 700 "$OUTFILE"
 echo "Step 2 of 2: Install the app on a repository"
 echo "  In the browser, click 'Install on GitHub', then on the GitHub page:"
 echo "  1. Choose 'Only select repositories'"
-echo "  2. Select ONLY ${USERNAME}/agent-github-access"
+echo "  2. Select ONLY ${USERNAME}/stewart-copeland-ai-police"
 echo "     This repo already has the required branch protection in place."
 echo "  3. Click Install"
 echo ""
@@ -525,7 +525,7 @@ done
 echo "Initializing inventory branch (${INV_BRANCH})…"
 ENCODED_INV_BRANCH=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$INV_BRANCH")
 INV_CONTENT=$(printf '%s\n%s\n%s\n' \
-  "# List of repositories onboarded to agent-github-access" \
+  "# List of repositories onboarded to stewart-copeland-ai-police" \
   "# app-id:${APP_ID}" \
   "# installation-id:${INSTALL_ID}")
 INV_CONTENT_B64=$(printf '%s' "$INV_CONTENT" | base64 | tr -d '\n')

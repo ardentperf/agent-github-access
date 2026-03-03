@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# uninstall.sh — removes all agent-github-access state after the GitHub App has
+# uninstall.sh — removes all stewart-copeland-ai-police state after the GitHub App has
 # been deleted. Run this after deleting the app in the GitHub UI.
 #
 # What it does:
 #   1. Fetches the inventory from the x-ai/<owner>/__inventory__do-not-delete branch
 #   2. Verifies the GitHub App no longer exists (polls until confirmed)
-#   3. Deletes GH_APP_ID and GH_APP_PEM secrets from the agent-github-access fork
+#   3. Deletes GH_APP_ID and GH_APP_PEM secrets from the stewart-copeland-ai-police fork
 #   4. Generates uninstall-rulesets.sh (run it separately with the onboard PAT)
 #
 # Requires: gh CLI authenticated with the install PAT
 #   (Administration read/write + Secrets read/write + Contents read/write
-#    on agent-github-access fork only)
+#    on stewart-copeland-ai-police fork only)
 set -euo pipefail
 
 OWNER_LOGIN=$(gh api user --jq '.login')
-FORK_REPO="${OWNER_LOGIN}/agent-github-access"
+FORK_REPO="${OWNER_LOGIN}/stewart-copeland-ai-police"
 INV_BRANCH="x-ai/${OWNER_LOGIN}/__inventory__do-not-delete"
 
 # ── Fetch latest inventory from inventory branch ──────────────────────────────
@@ -122,7 +122,7 @@ done
 
 echo ""
 echo "Ruleset cleanup complete."
-echo "You may now delete your agent-github-access fork if it is no longer needed."
+echo "You may now delete your stewart-copeland-ai-police fork if it is no longer needed."
 SCRIPTEOF
 
 chmod +x "$UNINSTALL_RULESETS"

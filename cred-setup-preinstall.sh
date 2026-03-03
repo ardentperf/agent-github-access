@@ -12,14 +12,14 @@ fi
 
 USERNAME="$1"
 MODE="$2"
-REPO="${USERNAME}/agent-github-access"
+REPO="${USERNAME}/stewart-copeland-ai-police"
 
 case "$MODE" in
   install)
     # Parameter names match GitHub's documented fine-grained PAT template URL format.
     # Repository selection cannot be prefilled via URL — the user must choose it on the page.
     URL="https://github.com/settings/personal-access-tokens/new"
-    URL+="?name=agent-github-access-install"
+    URL+="?name=stewart-copeland-ai-police-install"
     URL+="&target_name=${USERNAME}"
     URL+="&administration=write"
     URL+="&secrets=write"
@@ -29,10 +29,10 @@ case "$MODE" in
     echo ""
     echo "Required permissions:"
     echo "  Administration (read/write) — create repository rulesets on the fork"
-    echo "  Secrets (read/write)        — store app credentials in your agent-github-access fork"
+    echo "  Secrets (read/write)        — store app credentials in your stewart-copeland-ai-police fork"
     echo "  Contents (read/write)       — initialize the inventory branch"
     echo ""
-    echo "Repository access: ONLY your agent-github-access fork: ${REPO}"
+    echo "Repository access: ONLY your stewart-copeland-ai-police fork: ${REPO}"
     echo "  DO NOT grant access to any other repository."
     echo ""
     echo "Expiration: This PAT is only needed for install and uninstall."
@@ -47,7 +47,7 @@ case "$MODE" in
     echo ""
     echo "On the GitHub page:"
     echo "  1. Under 'Repository access', select 'Only select repositories'"
-    echo "     and choose ONLY your agent-github-access fork: ${REPO}"
+    echo "     and choose ONLY your stewart-copeland-ai-police fork: ${REPO}"
     echo "     DO NOT grant access to any other repository."
     echo "  2. Confirm Administration (read/write), Secrets (read/write),"
     echo "     and Contents (read/write) are selected"
@@ -61,7 +61,7 @@ case "$MODE" in
 
   onboard)
     URL="https://github.com/settings/personal-access-tokens/new"
-    URL+="?name=agent-github-access-onboard"
+    URL+="?name=stewart-copeland-ai-police-onboard"
     URL+="&target_name=${USERNAME}"
     URL+="&administration=write"
 

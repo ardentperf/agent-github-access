@@ -173,7 +173,7 @@ fi
 INV_BRANCH="x-ai/${OWNER_LOGIN}/__inventory__do-not-delete"
 ENCODED_INV_BRANCH=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$INV_BRANCH")
 INSTALL_ID=$(gh api \
-  "/repos/${OWNER_LOGIN}/agent-github-access/contents/README?ref=${ENCODED_INV_BRANCH}" \
+  "/repos/${OWNER_LOGIN}/stewart-copeland-ai-police/contents/README?ref=${ENCODED_INV_BRANCH}" \
   --jq '.content' 2>/dev/null \
   | base64 -d 2>/dev/null \
   | grep '^# installation-id:' \
@@ -206,9 +206,9 @@ fi
 # ── Trigger inventory workflow (only if app credentials are already stored) ───
 # During initial install, install.sh calls this script before the app exists.
 # Skip the trigger in that case; install.sh will trigger it after storing secrets.
-if gh api "/repos/${OWNER_LOGIN}/agent-github-access/actions/secrets/GH_APP_ID" --silent 2>/dev/null; then
+if gh api "/repos/${OWNER_LOGIN}/stewart-copeland-ai-police/actions/secrets/GH_APP_ID" --silent 2>/dev/null; then
   gh workflow run inventory.yml \
-    --repo "${OWNER_LOGIN}/agent-github-access" 2>/dev/null || true
+    --repo "${OWNER_LOGIN}/stewart-copeland-ai-police" 2>/dev/null || true
 fi
 
 echo ""

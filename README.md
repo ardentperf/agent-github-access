@@ -1,10 +1,10 @@
-[![Unit Tests](https://github.com/ardentperf/agent-github-access/actions/workflows/test.yml/badge.svg)](https://github.com/ardentperf/agent-github-access/actions/workflows/test.yml)
-[![E2E Tests](https://github.com/ardentperf/agent-github-access/actions/workflows/e2e.yml/badge.svg)](https://github.com/ardentperf/agent-github-access/actions/workflows/e2e.yml)
-[![App Access Inventory](https://github.com/ardentperf/agent-github-access/actions/workflows/inventory.yml/badge.svg)](https://github.com/ardentperf/agent-github-access/actions/workflows/inventory.yml)
+[![Unit Tests](https://github.com/ardentperf/stewart-copeland-ai-police/actions/workflows/test.yml/badge.svg)](https://github.com/ardentperf/stewart-copeland-ai-police/actions/workflows/test.yml)
+[![E2E Tests](https://github.com/ardentperf/stewart-copeland-ai-police/actions/workflows/e2e.yml/badge.svg)](https://github.com/ardentperf/stewart-copeland-ai-police/actions/workflows/e2e.yml)
+[![App Access Inventory](https://github.com/ardentperf/stewart-copeland-ai-police/actions/workflows/inventory.yml/badge.svg)](https://github.com/ardentperf/stewart-copeland-ai-police/actions/workflows/inventory.yml)
 
-📋 [Onboarded repositories inventory](https://github.com/ardentperf/agent-github-access/tree/x-ai/ardentperf/__inventory__do-not-delete)
+📋 [Onboarded repositories inventory](https://github.com/ardentperf/stewart-copeland-ai-police/tree/x-ai/ardentperf/__inventory__do-not-delete)
 
-# Agent GitHub Access
+# Stewart Copeland AI Police
 
 > **Personal GitHub accounts only.** This project is designed for individual users on free GitHub accounts. It is not intended for GitHub Organizations or Enterprise accounts and has not been tested with them.
 
@@ -14,7 +14,7 @@ Give an AI agent a distinct GitHub identity with server-side guardrails: the age
 
 A dedicated **GitHub App** acts as the agent's identity. Repository rulesets enforce that the app can only create or modify branches matching `x-ai/<owner>/**`. Every commit the agent makes appears as `<username>-agent[bot]` in the GitHub UI. The `x-ai/` prefix sorts to the end of the branch list, keeping agent branches visually separate from human work.
 
-You start by forking this repo into your personal account. Your `agent-github-access` fork becomes the home for this tool's state — specifically, the GitHub App credentials (app ID and private key) are stored as secrets in your `agent-github-access` fork. The setup scripts read and write these secrets so that `install.sh` and `onboard-repo.sh` are idempotent: re-running them is always safe and picks up where it left off.
+You start by forking this repo into your personal account. Your `stewart-copeland-ai-police` fork becomes the home for this tool's state — specifically, the GitHub App credentials (app ID and private key) are stored as secrets in your `stewart-copeland-ai-police` fork. The setup scripts read and write these secrets so that `install.sh` and `onboard-repo.sh` are idempotent: re-running them is always safe and picks up where it left off.
 
 `install.sh` generates a self-contained `authenticate-github.sh` with the app credentials embedded. Copy that single file to the agent's sandbox — it handles token generation, git configuration, and gh CLI authentication.
 
@@ -27,13 +27,13 @@ flowchart TD
 do not rename it"]) --> P1
         P1(["Create install PAT
 Administration + Secrets + Contents
-on agent-github-access fork only"]) --> P2
+on stewart-copeland-ai-police fork only"]) --> P2
         P2(["Create onboard PAT
 Administration only
 on all repositories"])
     end
 
-    subgraph fork["agent-github-access fork — GitHub (your account)"]
+    subgraph fork["stewart-copeland-ai-police fork — GitHub (your account)"]
         SEC["🔒 Secrets: GH_APP_ID, GH_APP_PEM"]
         INV["📄 __inventory__do-not-delete branch"]
         AU(["Inventory workflow
@@ -48,7 +48,7 @@ run onboard-repo.sh"]
 
     subgraph setup["Any Machine (PAT only, no admin creds)"]
         A(["gh auth login with PAT"]) --> B(["run install.sh"])
-        B --> BF["*agent-github-access branch rules set*"]
+        B --> BF["*stewart-copeland-ai-police branch rules set*"]
         BF --> C(["Browser: confirm app creation"])
         C --> D(["Browser: install app
 select one repo"])
@@ -87,17 +87,17 @@ The setup process uses two separate fine-grained PATs with minimal, non-overlapp
 
 | PAT | Used by | Repository access | Permissions | Lifetime |
 |---|---|---|---|---|
-| **Install PAT** | `install.sh`, `uninstall.sh` | `agent-github-access` fork only | Administration, Secrets, Contents | One-time; can expire/be deleted after install |
+| **Install PAT** | `install.sh`, `uninstall.sh` | `stewart-copeland-ai-police` fork only | Administration, Secrets, Contents | One-time; can expire/be deleted after install |
 | **Onboard PAT** | `onboard-repo.sh` | All repositories | Administration only | Keep active while onboarding repos |
 
 **0. Fork this repo** *(GitHub UI, admin access)*
 
-Fork `ardentperf/agent-github-access` into your personal GitHub account. Do not rename your fork of this repo — the repo name must stay `agent-github-access`.
+Fork `ardentperf/stewart-copeland-ai-police` into your personal GitHub account. Do not rename your fork of this repo — the repo name must stay `stewart-copeland-ai-police`.
 
 **1a. Create the install PAT** *(GitHub UI, admin access)*
 
 In the GitHub UI, create a fine-grained PAT with these settings:
-- **Repository access**: your `agent-github-access` fork (`<username>/agent-github-access`) **only**
+- **Repository access**: your `stewart-copeland-ai-police` fork (`<username>/stewart-copeland-ai-police`) **only**
 - **Permissions**: Administration (read/write), Secrets (read/write), Contents (read/write)
 - **Expiration**: can be short (e.g. 7 days) — only needed for install and uninstall
 
@@ -134,12 +134,12 @@ echo '<your-install-pat>' | gh auth login --hostname github.com --with-token
 ./install.sh <username>
 ```
 
-If `GH_APP_ID` is already set as a secret in your `agent-github-access` fork, the script will detect this and exit early — the app already exists. See [Uninstalling / full cleanup](#uninstalling--full-cleanup) if you need to start over.
+If `GH_APP_ID` is already set as a secret in your `stewart-copeland-ai-police` fork, the script will detect this and exit early — the app already exists. See [Uninstalling / full cleanup](#uninstalling--full-cleanup) if you need to start over.
 
 One script is generated:
 - `authenticate-github.sh` — give this to the agent
 
-The app ID and private key are stored as secrets in your `agent-github-access` fork (`GH_APP_ID` and `GH_APP_PEM`). The inventory branch is also initialized at this step.
+The app ID and private key are stored as secrets in your `stewart-copeland-ai-police` fork (`GH_APP_ID` and `GH_APP_PEM`). The inventory branch is also initialized at this step.
 
 **4. Install the app** *(browser)*
 
@@ -148,7 +148,7 @@ A browser tab opens automatically. On the GitHub page:
 - Select **one repo** you intend the agent to use (GitHub requires at least one)
 - Click **Install**
 
-The `agent-github-access` fork already has its branch protection rules in place (applied in step 3), so there is no window of unguarded access.
+The `stewart-copeland-ai-police` fork already has its branch protection rules in place (applied in step 3), so there is no window of unguarded access.
 
 **5. Grant the agent access to a repository** *(any machine, onboard PAT)*
 
