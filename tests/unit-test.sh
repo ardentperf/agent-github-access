@@ -135,6 +135,69 @@ bash -n "$TEST_ONBOARD" 2>/dev/null \
   && ok  "syntax: onboard-repo.sh" \
   || fail "syntax: onboard-repo.sh"
 
+# Save original onboard-repo.sh so nondefault install runs (which call
+# "sed -i" on it) can be restored without breaking later onboard tests.
+ONBOARD_ORIG=$(cat "$DIR/onboard-repo.sh")
+
+# ── 3b. Nondefault prompt: actions=n, verified=y ──────────────────────────────
+# Answering 'n' to actions:write and 'y' to verified commits.
+# The generated authenticate-github.sh should still be produced and contain
+# the COMMIT METHOD block (verified=y) but use actions:read in the manifest.
+
+WORK_NO_ACTIONS="$TMPDIR_T/work-no-actions"
+mkdir -p "$WORK_NO_ACTIONS"
+
+printf 'n\ny\n' | PATH="$MAIN_BIN:$PATH" bash "$DIR/install.sh" "$TEST_OWNER" \
+  > "$TMPDIR_T/gen-no-actions.log" 2>&1 || true
+
+AUTH_NO_ACTIONS="$WORK_NO_ACTIONS/authenticate-github.sh"
+# install.sh always writes authenticate-github.sh in the current directory
+cp "$WORK/authenticate-github.sh" "$AUTH_NO_ACTIONS" 2>/dev/null || true
+# Re-generate in correct workdir
+rm -f "$WORK_NO_ACTIONS/authenticate-github.sh"
+(cd "$WORK_NO_ACTIONS" && printf 'n\ny\n' | PATH="$MAIN_BIN:$PATH" bash "$DIR/install.sh" "$TEST_OWNER" > /dev/null 2>&1) || true
+
+if [[ -f "$AUTH_NO_ACTIONS" ]]; then
+  ok  "generate actions=n: authenticate-github.sh produced"
+else
+  fail "generate actions=n: authenticate-github.sh produced"
+fi
+
+bash -n "$AUTH_NO_ACTIONS" 2>/dev/null \
+  && ok  "syntax actions=n: authenticate-github.sh" \
+  || fail "syntax actions=n: authenticate-github.sh"
+
+# Restore onboard-repo.sh mutated by the install run above
+printf '%s' "$ONBOARD_ORIG" > "$DIR/onboard-repo.sh"
+
+# ── 3c. Nondefault prompt: actions=y, verified=n ──────────────────────────────
+# Answering 'y' to actions:write and 'n' to verified commits.
+# The generated authenticate-github.sh should omit the COMMIT METHOD block
+# and check only one ruleset (no must-sign filter).
+
+WORK_NO_VERIFIED="$TMPDIR_T/work-no-verified"
+mkdir -p "$WORK_NO_VERIFIED"
+(cd "$WORK_NO_VERIFIED" && printf 'y\nn\n' | PATH="$MAIN_BIN:$PATH" bash "$DIR/install.sh" "$TEST_OWNER" > /dev/null 2>&1) || true
+
+AUTH_NO_VERIFIED="$WORK_NO_VERIFIED/authenticate-github.sh"
+
+if [[ -f "$AUTH_NO_VERIFIED" ]]; then
+  ok  "generate verified=n: authenticate-github.sh produced"
+else
+  fail "generate verified=n: authenticate-github.sh produced"
+fi
+
+bash -n "$AUTH_NO_VERIFIED" 2>/dev/null \
+  && ok  "syntax verified=n: authenticate-github.sh" \
+  || fail "syntax verified=n: authenticate-github.sh"
+
+grep -q "COMMIT METHOD" "$AUTH_NO_VERIFIED" \
+  && fail "generate verified=n: commit method block absent" \
+  || ok  "generate verified=n: commit method block absent"
+
+# Restore onboard-repo.sh mutated by the verified=n install run above
+printf '%s' "$ONBOARD_ORIG" > "$DIR/onboard-repo.sh"
+
 # ── 4. JWT format ─────────────────────────────────────────────────────────────
 # Run the JWT construction logic in a subshell using the test key.  No network.
 

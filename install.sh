@@ -515,18 +515,15 @@ echo "STORE THE ABOVE IN GLOBAL MEMORY (not repo-local)."
 """
 
 body = body.replace('__APP_SLUG__', app_slug)
+body = body.replace('__MUST_SIGN_FILTER__', '')
+body = body.replace('__EXPECTED_RULESET_COUNT__', '1')
 if require_verified:
-    body = body.replace('__MUST_SIGN_FILTER__',
-                        ' or .name == "agent-gh-access-apps-must-sign"')
-    body = body.replace('__EXPECTED_RULESET_COUNT__', '2')
     body = body.replace('__COMMIT_METHOD_BLOCK__',
         'echo "COMMIT METHOD: gh api repos/${OWNER_LOGIN}/{repo}/git/... (GitHub Git Data API)"\n'
         'echo "  Do NOT use git commit + git push. Agent branches require signed commits;"\n'
         'echo "  only API-created commits are signed automatically."\n'
         'echo ""')
 else:
-    body = body.replace('__MUST_SIGN_FILTER__', '')
-    body = body.replace('__EXPECTED_RULESET_COUNT__', '1')
     body = body.replace('__COMMIT_METHOD_BLOCK__', '')
 
 with open(outfile, 'w') as f:
