@@ -6,7 +6,7 @@
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-  echo "Usage: $0 <github-username> <install|onboard>" >&2
+  echo "Usage: $0 <github-username> <install|onboard|privileged-onboard>" >&2
   exit 1
 fi
 
@@ -95,8 +95,50 @@ case "$MODE" in
     echo ""
     ;;
 
+  privileged-onboard)
+    # Classic PAT — required for PUT /user/installations/{id}/repositories/{repo_id},
+    # which only works with a classic PAT (fine-grained PATs and OAuth tokens are rejected).
+    # Classic PATs cannot be pre-filled via URL; the user must check the boxes manually.
+    URL="https://github.com/settings/tokens/new"
+    URL+="?description=privileged-onboard"
+
+    echo "PRIVILEGED-ONBOARD PAT — classic PAT used by onboard-repo.sh to add repos"
+    echo "to the GitHub App installation."
+    echo ""
+    echo "WARNING: Classic PATs are highly privileged. This token will have broad access"
+    echo "to your GitHub account. Treat it like a password."
+    echo "  - Store it securely and never commit it to a repository."
+    echo "  - Set a short expiration and delete it when not actively onboarding repos."
+    echo "  - Do not use it for any purpose other than running onboard-repo.sh."
+    echo ""
+    echo "Required scopes (check both boxes on the GitHub page):"
+    echo "  repo     — full repository access (needed to add repos to app installations)"
+    echo "  read:org — read org membership (needed for the installations endpoint)"
+    echo ""
+    echo "Open the URL below on any machine where you are logged in to GitHub in a browser."
+    echo "Classic PAT settings cannot be pre-filled — you must check the boxes manually."
+    echo ""
+    echo "  $URL"
+    echo ""
+    echo "On the GitHub page:"
+    echo "  1. Confirm the name is 'privileged-onboard' (or change as preferred)"
+    echo "  2. Set a short expiration (7 days recommended — only needed when onboarding)"
+    echo "  3. Check 'repo' (top-level checkbox)"
+    echo "  4. Check 'read:org' (under admin:org)"
+    echo "  5. Click Generate token and copy the result"
+    echo ""
+    echo "NOTE: A classic PAT with these scopes is the ONLY way to programmatically add"
+    echo "repos to the GitHub App installation. With normal user auth (OAuth or fine-grained"
+    echo "PAT), onboard-repo.sh can still set up branch protection rulesets, but the final"
+    echo "step of adding the repo to the app must be done in the GitHub web UI."
+    echo ""
+    echo "Then when running onboard-repo.sh:"
+    echo "  GH_TOKEN=<your-token> ./onboard-repo.sh <repo>"
+    echo ""
+    ;;
+
   *)
-    echo "Error: mode must be 'install' or 'onboard', got: ${MODE}" >&2
+    echo "Error: mode must be 'install', 'onboard', or 'privileged-onboard', got: ${MODE}" >&2
     exit 1
     ;;
 esac

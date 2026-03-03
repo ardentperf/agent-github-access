@@ -166,6 +166,43 @@ else
   echo "  – Skipped verified-commits ruleset (REQUIRE_VERIFIED_COMMITS=0)"
 fi
 
+# ── Add repo to GitHub App installation ───────────────────────────────────────
+# Read installation ID from the inventory branch. Attempt the API call; if it
+# fails (requires a classic PAT with repo scope, not a fine-grained PAT), print
+# a one-liner the user can run with appropriate credentials.
+INV_BRANCH="x-ai/${OWNER_LOGIN}/__inventory__do-not-delete"
+ENCODED_INV_BRANCH=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$INV_BRANCH")
+INSTALL_ID=$(gh api \
+  "/repos/${OWNER_LOGIN}/agent-github-access/contents/README?ref=${ENCODED_INV_BRANCH}" \
+  --jq '.content' 2>/dev/null \
+  | base64 -d 2>/dev/null \
+  | grep '^# installation-id:' \
+  | cut -d: -f2 || true)
+REPO_ID=$(gh api "/repos/${TARGET_REPO}" --jq '.id' 2>/dev/null || true)
+
+if [[ -n "$INSTALL_ID" && -n "$REPO_ID" ]]; then
+  if gh api --method PUT "/user/installations/${INSTALL_ID}/repositories/${REPO_ID}" --silent 2>/dev/null; then
+    echo "  ✓ ${TARGET_REPO} added to GitHub App installation"
+  else
+    INSTALL_URL="https://github.com/settings/installations/${INSTALL_ID}"
+    echo "  Could not add ${TARGET_REPO} to the GitHub App installation automatically."
+    echo "  (Requires a classic PAT with 'repo' and 'read:org' scopes — see cred-setup-preinstall.sh privileged-onboard)"
+    echo ""
+    echo "  Add it manually: under 'Repository access', add ${TARGET_REPO}, then click Save."
+    echo "  Opening browser…"
+    if command -v xdg-open &>/dev/null; then
+      xdg-open "$INSTALL_URL"
+    elif command -v open &>/dev/null; then
+      open "$INSTALL_URL"
+    else
+      echo "  Could not detect a browser opener. Open manually:"
+      echo "    $INSTALL_URL"
+    fi
+  fi
+else
+  echo "  (could not read installation ID from inventory — skipping app installation step)"
+fi
+
 # ── Trigger inventory workflow (only if app credentials are already stored) ───
 # During initial install, install.sh calls this script before the app exists.
 # Skip the trigger in that case; install.sh will trigger it after storing secrets.
