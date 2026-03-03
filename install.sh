@@ -102,10 +102,7 @@ echo ""
 INV_BRANCH="x-ai/${USERNAME}/inventory---internal-do-not-delete"
 echo "Checking inventory branch (${INV_BRANCH})…"
 ENCODED_INV_BRANCH=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$INV_BRANCH")
-INV_BRANCH_EXISTS=$(gh api \
-  "/repos/${FORK_REPO}/git/ref/heads/${ENCODED_INV_BRANCH}" \
-  --jq '.ref // empty' 2>/dev/null || true)
-if [[ -n "$INV_BRANCH_EXISTS" ]]; then
+if gh api "/repos/${FORK_REPO}/git/ref/heads/${ENCODED_INV_BRANCH}" --silent 2>/dev/null; then
   echo "  ✓ Inventory branch already exists — skipping init."
 else
   echo "  Initializing inventory branch…"
