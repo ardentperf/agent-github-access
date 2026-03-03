@@ -224,17 +224,15 @@ The agent must run `~/authenticate-github.sh` before doing any GitHub work, and 
 
 ## Uninstalling / full cleanup
 
-1. **Delete the GitHub App** — Settings → Developer settings → GitHub Apps → your app → Edit → Advanced → Delete GitHub App. This immediately revokes all tokens and removes the app from every installed repo.
-
-2. **Run `uninstall.sh`** with the **install PAT** — deletes the fork secrets and generates `uninstall-rulesets.sh`:
+1. **Run `uninstall.sh`** with the **install PAT** — fetches the inventory, prompts you to delete the GitHub App if it still exists, deletes the fork secrets, and generates `uninstall-rulesets.sh`:
 
 ```bash
 GH_TOKEN='<your-install-pat>' ./uninstall.sh
 ```
 
-The script fetches the inventory from the `x-ai/<owner>/__inventory__do-not-delete` branch and will prompt you to delete the app if it detects it still exists before proceeding.
+The script will detect if the app still exists and prompt you with the deletion URL before proceeding. Once the app is deleted, all tokens are immediately revoked and the app is removed from every installed repo.
 
-3. **Run `uninstall-rulesets.sh`** with the **onboard PAT** — removes the two `agent-gh-access-*` rulesets from every repo in the inventory:
+2. **Run `uninstall-rulesets.sh`** with the **onboard PAT** — removes the two `agent-gh-access-*` rulesets from every repo in the inventory:
 
 ```bash
 GH_TOKEN='<your-onboard-pat>' ./uninstall-rulesets.sh
