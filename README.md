@@ -95,7 +95,6 @@ Optionally, Stewart Copeland itself can run with minimum privileges using two se
 ```mermaid
 flowchart TD
     subgraph admin["Admin On Your GitHub Account"]
-        direction TD
         F(["Fork this repo
 do not rename it"]) --> P1
         P1(["Option: Create install PAT"]) --> P2
@@ -103,15 +102,13 @@ do not rename it"]) --> P1
     end
 
     subgraph fork["Stewart Copeland GitHub Repo"]
-        direction TD
         SEC["🔒 Secrets: GH_APP_ID, GH_APP_PEM
 📄 Branch: __inventory__do-not-delete"]
-        SEC -.->|"reads"| AU["*Inventory workflow (GH actions)
+        SEC -.->|"reads"| AU["*Inventory GitHub Action
 (also scheduled daily)*"]
     end
 
-    subgraph setup["Option: Lower-Privilege PATs"]
-        direction TD
+    subgraph setup["Setup Box"]
         B(["run install.sh"]) --> BF["*branch rules set for
 **Stewart Copeland Repo***"]
         BF --> C(["Browser: confirm app creation"])
@@ -120,20 +117,18 @@ do not rename it"]) --> P1
         D --> E["*authenticate-github.sh generated*"]
         E --> R(["run onboard-repo.sh for **Any Repo**"])
         R --> H["*Branch rules set
-AI Agent App granted access
+AI Agent App access
 for **Any Repo***"]
     end
 
     subgraph agent["AI Agent on VM/Sandbox"]
-        direction TD
         G(["Option: pre-populate global agent config"])
         G --> I(["Tell agent: run $HOME/authenticate-github.sh"])
         I --> J["*git + gh CLI configured
 token valid ~1 hour*"]
         J --> K["*Agent works in branch:
 **x-ai/&lt;owner&gt;/…***"]
-        K --> L["*Agent automatically re-runs
-authenticate-github.sh as needed*"]
+        K --> L["*Agent automatically re-runs authenticate-github.sh as needed*"]
     end
 
     P1 -.->|"option: use install PAT"| B
