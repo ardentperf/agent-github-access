@@ -73,23 +73,17 @@ done
 echo
 read -r -p "Press ENTER to rewrite history, or Ctrl-C to abort... "
 
-# Use git filter-branch with an env filter to rewrite only those commits
-AGENT_SHA_LIST=$(printf '%s\n' "${AGENT_COMMITS[@]}")
+# Find the parent of the oldest commit in range to use as rebase base
+BASE_PARENT=$(git rev-parse "$(git log --format="%H" "$RANGE" | tail -1)^" 2>/dev/null || true)
+if [[ -z "$BASE_PARENT" ]]; then
+  echo "Error: could not determine base parent commit." >&2; exit 1
+fi
 
-export YOUR_NAME YOUR_EMAIL AGENT_SHA_LIST AGENT_PATTERN
-
-git filter-branch --force --env-filter '
-  if echo "$AGENT_SHA_LIST" | grep -qx "$GIT_COMMIT"; then
-    if echo "$GIT_AUTHOR_NAME $GIT_AUTHOR_EMAIL" | grep -qi "$AGENT_PATTERN"; then
-      export GIT_AUTHOR_NAME="$YOUR_NAME"
-      export GIT_AUTHOR_EMAIL="$YOUR_EMAIL"
-    fi
-    if echo "$GIT_COMMITTER_NAME $GIT_COMMITTER_EMAIL" | grep -qi "$AGENT_PATTERN"; then
-      export GIT_COMMITTER_NAME="$YOUR_NAME"
-      export GIT_COMMITTER_EMAIL="$YOUR_EMAIL"
-    fi
-  fi
-' "$RANGE"
+git rebase "$BASE_PARENT" \
+  --exec "if git log -1 --format='%ae' | grep -qi '$AGENT_PATTERN'; then
+    GIT_COMMITTER_NAME='$YOUR_NAME' GIT_COMMITTER_EMAIL='$YOUR_EMAIL' \
+      git commit --amend --no-edit --author='$YOUR_NAME <$YOUR_EMAIL>';
+  fi"
 
 echo
 echo "Done. Rewrote ${#AGENT_COMMITS[@]} commit(s)."
